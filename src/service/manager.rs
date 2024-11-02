@@ -4,7 +4,7 @@ use std::{future::Future, net::IpAddr, path::PathBuf, process::ExitCode, time::D
 
 use clap::{builder::PossibleValuesParser, Arg, ArgAction, ArgGroup, ArgMatches, Command, ValueHint};
 use futures::future::{self, Either};
-use log::{info, trace};
+use log::{info, trace, warn};
 use tokio::{
     self,
     runtime::{Builder, Runtime},
@@ -536,7 +536,10 @@ pub fn create(matches: &ArgMatches) -> Result<(Runtime, impl Future<Output = Exi
                 crate::EXIT_CODE_SERVER_ABORTED.into()
             }
             // The abort signal future resolved. Means we should just exit.
-            Either::Right(_) => ExitCode::SUCCESS,
+            Either::Right(_) => {
+                warn!("server exiting!");
+                ExitCode::SUCCESS
+            },
         }
     };
 

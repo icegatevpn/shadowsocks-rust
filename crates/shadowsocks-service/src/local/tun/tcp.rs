@@ -36,8 +36,7 @@ use crate::{
         loadbalancing::PingBalancer,
         net::AutoProxyClientStream,
         utils::{establish_tcp_tunnel, establish_tcp_tunnel_bypassed},
-    },
-    net::utils::to_ipv4_mapped,
+    }, me_debug, net::utils::to_ipv4_mapped
 };
 
 use super::virt_device::VirtTunDevice;
@@ -258,6 +257,7 @@ impl Drop for TcpTun {
 
 impl TcpTun {
     pub fn new(context: Arc<ServiceContext>, balancer: PingBalancer, mtu: u32) -> TcpTun {
+        debug!("<<< TcpTun");
         let mut capabilities = DeviceCapabilities::default();
         capabilities.medium = Medium::Ip;
         capabilities.max_transmission_unit = mtu as usize;

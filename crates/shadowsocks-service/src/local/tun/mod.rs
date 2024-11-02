@@ -79,6 +79,7 @@ impl TunBuilder {
     }
 
     pub fn destination(&mut self, addr: IpNet) {
+        info!("something here!");
         self.tun_config.destination(addr.addr());
     }
 

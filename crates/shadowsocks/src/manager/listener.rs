@@ -2,7 +2,7 @@
 
 use std::io;
 
-use log::warn;
+use log::{debug, warn};
 
 use crate::{config::ManagerAddr, context::Context, relay::udprelay::MAXIMUM_UDP_PAYLOAD_SIZE};
 
@@ -21,6 +21,7 @@ pub struct ManagerListener {
 impl ManagerListener {
     /// Create a `ManagerDatagram` binding to requested `bind_addr`
     pub async fn bind(context: &Context, bind_addr: &ManagerAddr) -> io::Result<ManagerListener> {
+        debug!("<< bind address {}", bind_addr);
         ManagerDatagram::bind(context, bind_addr)
             .await
             .map(|socket| ManagerListener { socket })

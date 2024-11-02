@@ -3,7 +3,7 @@
 #[cfg(unix)]
 use std::io::ErrorKind;
 use std::{fmt, io, net::SocketAddr};
-
+use log::debug;
 use tokio::net::UdpSocket;
 #[cfg(unix)]
 use tokio::net::{unix::SocketAddr as UnixSocketAddr, UnixDatagram};
@@ -56,11 +56,16 @@ pub enum ManagerDatagram {
 impl ManagerDatagram {
     /// Create a `ManagerDatagram` binding to requested `bind_addr`
     pub async fn bind(context: &Context, bind_addr: &ManagerAddr) -> io::Result<ManagerDatagram> {
+        debug!("<< BIND!!: {}", bind_addr);
         match *bind_addr {
-            ManagerAddr::SocketAddr(ref saddr) => Ok(ManagerDatagram::UdpDatagram(
-                ShadowUdpSocket::listen(saddr).await?.into(),
-            )),
+            ManagerAddr::SocketAddr(ref saddr) =>  {
+                debug!("<< ss socket: {}", saddr);
+                Ok(ManagerDatagram::UdpDatagram(
+                    ShadowUdpSocket::listen(saddr).await?.into(),
+                ))
+            },
             ManagerAddr::DomainName(ref dname, port) => {
+                debug!("<< ss DomainName: {}", port);
                 let (_, socket) =
                     lookup_then!(context, dname, port, |saddr| { ShadowUdpSocket::listen(&saddr).await })?;
 
@@ -68,10 +73,12 @@ impl ManagerDatagram {
             }
             #[cfg(unix)]
             ManagerAddr::UnixSocketAddr(ref path) => {
+                debug!("<< pathL {:?}", path);
                 use std::fs;
 
                 // Remove it first incase it is already exists
-                let _ = fs::remove_file(path);
+                let r = fs::remove_file(path);
+                debug!("<<<< rremoved: {:?}", r);
 
                 Ok(ManagerDatagram::UnixDatagram(UnixDatagram::bind(path)?))
             }
@@ -84,8 +91,12 @@ impl ManagerDatagram {
         bind_addr: &ManagerAddr,
         connect_opts: &ConnectOpts,
     ) -> io::Result<ManagerDatagram> {
+        debug!("<< connect");
         match *bind_addr {
-            ManagerAddr::SocketAddr(sa) => ManagerDatagram::connect_socket_addr(sa, connect_opts).await,
+            ManagerAddr::SocketAddr(sa) => {
+                debug!("<< SOCKET ADDRESS: {}", sa);
+                ManagerDatagram::connect_socket_addr(sa, connect_opts).await
+            },
 
             ManagerAddr::DomainName(ref dname, port) => {
                 // Try connect to all socket addresses
@@ -99,6 +110,7 @@ impl ManagerDatagram {
             // For unix socket, it doesn't need to bind to any valid address
             // Because manager won't response to you
             ManagerAddr::UnixSocketAddr(ref path) => {
+                debug!("<< UNIX SOCKET ADDRESS: {:?}", path);
                 let dgram = UnixDatagram::unbound()?;
                 dgram.connect(path)?;
                 Ok(ManagerDatagram::UnixDatagram(dgram))
@@ -129,7 +141,7 @@ impl ManagerDatagram {
             }
             #[cfg(unix)]
             ManagerDatagram::UnixDatagram(ref mut unix) => {
-                let (s, addr) = unix.recv_from(buf).await?;
+                let (s, addr) = unix.recv_from(buf).await.expect("<<recv_from failed");
                 Ok((s, ManagerSocketAddr::UnixSocketAddr(addr)))
             }
         }

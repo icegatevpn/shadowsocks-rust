@@ -70,10 +70,14 @@ pub struct ConnectOpts {
 
     /// UDP options
     pub udp: UdpSocketOpts,
+
+    /// only allow connections from users, no plain server connections.
+    pub strict: bool,
 }
 
 /// Inbound connection options
-#[derive(Clone, Debug, Default)]
+// #[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct AcceptOpts {
     /// TCP options
     pub tcp: TcpSocketOpts,
@@ -83,4 +87,18 @@ pub struct AcceptOpts {
 
     /// Enable IPV6_V6ONLY option for socket
     pub ipv6_only: bool,
+
+    /// only allow connections from users, no plain server connections.
+    pub strict: bool,
+}
+impl Default for AcceptOpts {
+    fn default() -> Self {
+        AcceptOpts {
+            tcp: TcpSocketOpts::default(),
+            udp: UdpSocketOpts::default(),
+            ipv6_only: false,
+            // change this if you want to allow only server connections with no users configured with AEAD2022
+            strict: true
+        }
+    }
 }

@@ -142,6 +142,7 @@ pub fn decrypt_client_payload(
     key: &[u8],
     payload: &mut [u8],
     user_manager: Option<&ServerUserManager>,
+    strict: &bool,
 ) -> ProtocolResult<(usize, Address, Option<UdpSocketControlData>)> {
     match method.category() {
         CipherCategory::None => {
@@ -174,7 +175,7 @@ pub fn decrypt_client_payload(
                 .map_err(Into::into)
         }
         #[cfg(feature = "aead-cipher-2022")]
-        CipherCategory::Aead2022 => decrypt_client_payload_aead_2022(context, method, key, payload, user_manager)
+        CipherCategory::Aead2022 => decrypt_client_payload_aead_2022(context, method, key, payload, user_manager, strict)
             .map(|(n, a, c)| (n, a, Some(c)))
             .map_err(Into::into),
     }

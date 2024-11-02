@@ -16,7 +16,8 @@ use base64::Engine as _;
 use byte_string::ByteStr;
 use bytes::Bytes;
 use cfg_if::cfg_if;
-use log::{error, warn};
+use log::{debug, error, warn};
+// use serde::de::Unexpected::Str;
 use thiserror::Error;
 use url::{self, Url};
 
@@ -331,22 +332,25 @@ pub enum ServerUserError {
 /// Server multi-users manager
 #[derive(Clone, Debug)]
 pub struct ServerUserManager {
+    name: String,
     users: HashMap<Bytes, Arc<ServerUser>>,
 }
 
 impl ServerUserManager {
     /// Create a new manager
-    pub fn new() -> ServerUserManager {
-        ServerUserManager { users: HashMap::new() }
+    pub fn new(name: &str) -> ServerUserManager {
+        ServerUserManager { name: name.into(), users: HashMap::new() }
     }
 
     /// Add a new user
     pub fn add_user(&mut self, user: ServerUser) {
+        debug!("<< add user: {:?} = {:?}", user.name, user.clone_identity_hash());
         self.users.insert(user.clone_identity_hash(), Arc::new(user));
     }
 
     /// Get user by hash key
     pub fn get_user_by_hash(&self, user_hash: &[u8]) -> Option<&ServerUser> {
+        debug!("<< get user by hash:{:?} {:?} = {:?}", self.name, user_hash, self.users);
         self.users.get(user_hash).map(AsRef::as_ref)
     }
 
@@ -368,7 +372,7 @@ impl ServerUserManager {
 
 impl Default for ServerUserManager {
     fn default() -> ServerUserManager {
-        ServerUserManager::new()
+        ServerUserManager::new("default".into())
     }
 }
 
@@ -450,6 +454,10 @@ fn make_derived_key(method: CipherKind, password: &str, enc_key: &mut [u8]) {
 
         return;
     }
+//  } else { // was I don't something here?
+//         openssl_bytes_to_key(password.as_bytes(), enc_key);
+//     }
+// }
 
     cfg_if! {
         if #[cfg(any(feature = "stream-cipher", feature = "aead-cipher"))] {
@@ -1221,6 +1229,7 @@ impl FromStr for ManagerAddr {
     type Err = ManagerAddrError;
 
     fn from_str(s: &str) -> Result<ManagerAddr, ManagerAddrError> {
+        debug!("<< from here!!!");
         match s.find(':') {
             Some(pos) => {
                 // Contains a ':' in address, must be IP:Port or Domain:Port
@@ -1232,7 +1241,10 @@ impl FromStr for ManagerAddr {
                         let (sdomain, sport) = (sdomain.trim(), sport[1..].trim());
 
                         match sport.parse::<u16>() {
-                            Ok(port) => Ok(ManagerAddr::DomainName(sdomain.to_owned(), port)),
+                            Ok(port) => {
+                                debug!("<< a port::{}", port);
+                                Ok(ManagerAddr::DomainName(sdomain.to_owned(), port))
+                            },
                             Err(..) => Err(ManagerAddrError),
                         }
                     }

@@ -246,6 +246,7 @@ fn decrypt_message(
     key: &[u8],
     packet: &mut [u8],
     user_manager: Option<&ServerUserManager>,
+    strict: &bool // Must have a user_manager to decrypt messages
 ) -> ProtocolResult<Option<Arc<ServerUser>>> {
     let mut client_user = None;
 
@@ -325,6 +326,7 @@ fn decrypt_message(
             };
 
             let cipher = if method_support_eih(method) {
+                // todo create mutex for user_manager so it can be updated!!
                 if let Some(user_manager) = user_manager {
                     // Extensible Identity Header
                     // https://github.com/Shadowsocks-NET/shadowsocks-specs/blob/main/2022-2-shadowsocks-2022-extensible-identity-headers.md
@@ -369,6 +371,10 @@ fn decrypt_message(
                         }
                     }
                 } else {
+                    if *strict {
+                        error!("strict mode enabled, but no user_manager");
+                        return Err(ProtocolError::InvalidClientUser("Strict enabled, no users.".into()));
+                    }
                     get_cipher(method, key, session_id)
                 }
             } else {
@@ -522,6 +528,7 @@ pub fn decrypt_client_payload_aead_2022(
     key: &[u8],
     payload: &mut [u8],
     user_manager: Option<&ServerUserManager>,
+    strict: &bool,
 ) -> ProtocolResult<(usize, Address, UdpSocketControlData)> {
     let nonce_len = get_nonce_len(method);
     let tag_len = method.tag_len();
@@ -533,7 +540,8 @@ pub fn decrypt_client_payload_aead_2022(
         return Err(ProtocolError::PacketTooShort(header_len, payload.len()));
     }
 
-    let user = decrypt_message(context, method, key, payload, user_manager)?;
+    // todo user_manager mutex!!
+    let user = decrypt_message(context, method, key, payload, user_manager, strict)?;
 
     let data = &payload[nonce_len..payload.len() - tag_len];
     let mut cursor = Cursor::new(data);
@@ -641,7 +649,7 @@ pub fn decrypt_server_payload_aead_2022(
         return Err(ProtocolError::PacketTooShort(header_len, payload.len()));
     }
 
-    let user = decrypt_message(context, method, key, payload, None)?;
+    let user = decrypt_message(context, method, key, payload, None, &false)?;
     debug_assert!(user.is_none(), "server respond packet shouldn't have EIH");
 
     let data = &payload[nonce_len..payload.len() - tag_len];

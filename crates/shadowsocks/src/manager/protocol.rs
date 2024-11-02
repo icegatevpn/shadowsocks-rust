@@ -6,9 +6,10 @@ use std::{
     str,
     string::ToString,
 };
-
+use log::{debug, error};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use crate::manager::protocol::ManagerRequest::AddUser;
 
 /// Abstract Manager Protocol
 pub trait ManagerProtocol: Sized {
@@ -25,7 +26,7 @@ pub struct ServerUserConfig {
 
 /// Server's configuration
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct ServerConfig {
+pub struct ServerConfigOther {
     pub server_port: u16,
     pub password: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -44,8 +45,60 @@ pub struct ServerConfig {
     pub users: Option<Vec<ServerUserConfig>>,
 }
 
+/// `add User` request
+#[derive(Debug, Clone)]
+pub struct AURequest {
+    pub config: ServerConfigOther
+}
+// pub type AURequest = ServerConfig;
+
+impl ManagerProtocol for AURequest {
+    fn from_bytes(buf: &[u8]) -> Result<Self, Error> {
+        debug!("<< from_bytes: {:?}", buf);
+        let mut nsplit = buf.splitn(2, |b| *b == b':');
+
+        let cmd = nsplit.next().expect("first element shouldn't be None");
+        let cmd = str::from_utf8(cmd)?.trim();
+        if cmd != "addu" {
+            return Err(Error::UnrecognizedCommand(cmd.to_owned()));
+        }
+
+        match nsplit.next() {
+            None => Err(Error::MissingParameter),
+            Some(param) => {
+                debug!("<< Itsa mee: {:?}", param);
+                let req = serde_json::from_slice(param)?;
+                Ok(AURequest{config:req})
+            }
+        }
+    }
+
+    fn to_bytes(&self) -> Result<Vec<u8>, Error> {
+        let mut buf = b"addu: ".to_vec();
+        serde_json::to_writer(&mut buf, &self.config)?;
+        buf.push(b'\n');
+        Ok(buf)
+    }
+}
+
+/// `add User` response
+#[derive(Debug, Clone)]
+pub struct AUResponse(pub String);
+
+impl ManagerProtocol for AUResponse {
+    fn from_bytes(buf: &[u8]) -> Result<Self, Error> {
+        Ok(AUResponse(str::from_utf8(buf)?.trim().to_owned()))
+    }
+
+    fn to_bytes(&self) -> Result<Vec<u8>, Error> {
+        let mut v = b"addUser".to_vec();//self.0.as_bytes().to_owned();
+        v.push(b'\n');
+        Ok(v)
+    }
+}
+
 /// `add` request
-pub type AddRequest = ServerConfig;
+pub type AddRequest = ServerConfigOther;
 
 impl ManagerProtocol for AddRequest {
     fn from_bytes(buf: &[u8]) -> Result<Self, Error> {
@@ -162,7 +215,7 @@ impl ManagerProtocol for ListRequest {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(transparent)]
 pub struct ListResponse {
-    pub servers: Vec<ServerConfig>,
+    pub servers: Vec<ServerConfigOther>,
 }
 
 impl ManagerProtocol for ListResponse {
@@ -289,6 +342,7 @@ pub enum ManagerRequest {
     List(ListRequest),
     Ping(PingRequest),
     Stat(StatRequest),
+    AddUser(AURequest),
 }
 
 impl ManagerRequest {
@@ -300,6 +354,7 @@ impl ManagerRequest {
             ManagerRequest::List(..) => "list",
             ManagerRequest::Ping(..) => "ping",
             ManagerRequest::Stat(..) => "stat",
+            ManagerRequest::AddUser(..) => "addu",
         }
     }
 }
@@ -312,6 +367,7 @@ impl ManagerProtocol for ManagerRequest {
             ManagerRequest::List(ref req) => req.to_bytes(),
             ManagerRequest::Ping(ref req) => req.to_bytes(),
             ManagerRequest::Stat(ref req) => req.to_bytes(),
+            ManagerRequest::AddUser(ref req) => req.to_bytes(),
         }
     }
 
@@ -325,6 +381,18 @@ impl ManagerProtocol for ManagerRequest {
                 Some(param) => {
                     let req = serde_json::from_slice(param)?;
                     Ok(ManagerRequest::Add(req))
+                }
+            },
+            "addu" => match nsplit.next() {
+                None => {
+                    error!("<<<< blahhh");
+                    Err(Error::MissingParameter)
+                },
+                Some(param) => {
+                    debug!("<< param:: up: {:?}", String::from_utf8(param.to_vec()));
+                    let req = serde_json::from_slice(param)?;
+                    debug!("<< req {:?}", req);
+                    Ok(ManagerRequest::AddUser(AURequest{config:req}))
                 }
             },
             "remove" => match nsplit.next() {

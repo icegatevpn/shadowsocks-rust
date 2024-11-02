@@ -76,6 +76,15 @@ mod utils;
 #[allow(dead_code)]
 const DEFAULT_UDP_EXPIRY_DURATION: Duration = Duration::from_secs(5 * 60);
 
+#[macro_export]
+macro_rules! me_debug {
+    ( $( $x:expr ),* ) => {
+        {
+            log::warn!($( $x, )*);
+        }
+    };
+}
+
 #[cfg(feature = "hickory-dns")]
 fn hint_support_default_system_resolver() -> bool {
     // Nearly all *nix system have /etc/resolv.conf, except Android.

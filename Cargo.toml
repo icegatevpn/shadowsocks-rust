@@ -65,6 +65,8 @@ default = [
     "service",
     "local-http",
     "local-tunnel",
+    "local-tun",
+    "utility-url-outline",
     "local-socks4",
     "multi-threaded",
     "aead-cipher",
@@ -72,14 +74,7 @@ default = [
 ]
 
 # Basic Features
-basic = [
-    "logging",
-    "hickory-dns",
-    "local",
-    "server",
-    "multi-threaded",
-    "aead-cipher",
-]
+basic = ["logging", "hickory-dns", "local", "server", "multi-threaded"]
 
 # All Suggested Features
 full = [
@@ -204,7 +199,7 @@ aead-cipher = ["shadowsocks-service/aead-cipher"]
 
 # Enable extra AEAD ciphers
 # WARN: These non-standard AEAD ciphers are not officially supported by shadowsocks community
-aead-cipher-extra = ["aead-cipher", "shadowsocks-service/aead-cipher-extra"]
+aead-cipher-extra = ["shadowsocks-service/aead-cipher-extra"]
 
 # Enable AEAD 2022
 aead-cipher-2022 = ["shadowsocks-service/aead-cipher-2022"]
@@ -263,6 +258,7 @@ rpmalloc = { version = "0.2", optional = true }
 shadowsocks-service = { version = "1.21.3", path = "./crates/shadowsocks-service" }
 
 windows-service = { version = "0.7", optional = true }
+chrono = "0.4.38"
 
 [target.'cfg(unix)'.dependencies]
 daemonize = "0.5"
