@@ -449,6 +449,7 @@ where
     fn decrypt_recv_buffer(
         &self,
         recv_buf: &mut [u8],
+        // pass in fixed user_manager option for each buffer (not receiver)
         user_manager: Option<&ServerUserManager>,
         strict: &bool,
     ) -> ProtocolResult<(usize, Address, Option<UdpSocketControlData>)> {

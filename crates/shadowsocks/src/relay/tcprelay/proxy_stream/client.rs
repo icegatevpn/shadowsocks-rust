@@ -16,7 +16,7 @@ use tokio::{
     io::{AsyncRead, AsyncWrite, ReadBuf},
     time,
 };
-
+use tokio::sync::mpsc::UnboundedReceiver;
 #[cfg(feature = "aead-cipher-2022")]
 use crate::relay::get_aead_2022_padding_size;
 use crate::{
@@ -29,6 +29,7 @@ use crate::{
         tcprelay::crypto_io::{CryptoRead, CryptoStream, CryptoWrite, StreamType},
     },
 };
+use crate::config::ServerUserManager;
 
 #[derive(Debug)]
 enum ProxyClientStreamWriteState {
@@ -53,6 +54,7 @@ pub struct ProxyClientStream<S> {
     writer_state: ProxyClientStreamWriteState,
     reader_state: ProxyClientStreamReadState,
     context: SharedContext,
+    user_manager_rcv: Option<UnboundedReceiver<ServerUserManager>>,
 }
 
 static DEFAULT_CONNECT_OPTS: Lazy<ConnectOpts> = Lazy::new(Default::default);
@@ -63,11 +65,18 @@ impl ProxyClientStream<OutboundTcpStream> {
         context: SharedContext,
         svr_cfg: &ServerConfig,
         addr: A,
+        user_manager_rcv: Option<UnboundedReceiver<ServerUserManager>>
     ) -> io::Result<ProxyClientStream<OutboundTcpStream>>
     where
         A: Into<Address>,
     {
-        ProxyClientStream::connect_with_opts(context, svr_cfg, addr, &DEFAULT_CONNECT_OPTS).await
+        ProxyClientStream::connect_with_opts(
+            context,
+            svr_cfg,
+            addr,
+            &DEFAULT_CONNECT_OPTS,
+            user_manager_rcv
+        ).await
     }
 
     /// Connect to target `addr` via shadowsocks' server configured by `svr_cfg`
@@ -76,11 +85,19 @@ impl ProxyClientStream<OutboundTcpStream> {
         svr_cfg: &ServerConfig,
         addr: A,
         opts: &ConnectOpts,
+        user_manager_rcv: Option<UnboundedReceiver<ServerUserManager>>
     ) -> io::Result<ProxyClientStream<OutboundTcpStream>>
     where
         A: Into<Address>,
     {
-        ProxyClientStream::connect_with_opts_map(context, svr_cfg, addr, opts, |s| s).await
+        ProxyClientStream::connect_with_opts_map(
+            context,
+            svr_cfg,
+            addr,
+            opts,
+            |s| s,
+            user_manager_rcv
+        ).await
     }
 }
 
@@ -94,12 +111,13 @@ where
         svr_cfg: &ServerConfig,
         addr: A,
         map_fn: F,
+        user_manager_rcv: Option<UnboundedReceiver<ServerUserManager>>
     ) -> io::Result<ProxyClientStream<S>>
     where
         A: Into<Address>,
         F: FnOnce(OutboundTcpStream) -> S,
     {
-        ProxyClientStream::connect_with_opts_map(context, svr_cfg, addr, &DEFAULT_CONNECT_OPTS, map_fn).await
+        ProxyClientStream::connect_with_opts_map(context, svr_cfg, addr, &DEFAULT_CONNECT_OPTS, map_fn, user_manager_rcv).await
     }
 
     /// Connect to target `addr` via shadowsocks' server configured by `svr_cfg`, maps `TcpStream` to customized stream with `map_fn`
@@ -109,6 +127,7 @@ where
         addr: A,
         opts: &ConnectOpts,
         map_fn: F,
+        user_manager_rcv: Option<UnboundedReceiver<ServerUserManager>>,
     ) -> io::Result<ProxyClientStream<S>>
     where
         A: Into<Address>,
@@ -142,13 +161,19 @@ where
             opts
         );
 
-        Ok(ProxyClientStream::from_stream(context, map_fn(stream), svr_cfg, addr))
+        Ok(ProxyClientStream::from_stream(context, map_fn(stream), svr_cfg, addr, user_manager_rcv))
     }
 
     /// Create a `ProxyClientStream` with a connected `stream` to a shadowsocks' server
     ///
     /// NOTE: `stream` must be connected to the server with the same configuration as `svr_cfg`, otherwise strange errors would occurs
-    pub fn from_stream<A>(context: SharedContext, stream: S, svr_cfg: &ServerConfig, addr: A) -> ProxyClientStream<S>
+    pub fn from_stream<A>(
+        context: SharedContext,
+        stream: S,
+        svr_cfg: &ServerConfig,
+        addr: A,
+        user_manager_rcv: Option<UnboundedReceiver<ServerUserManager>>,
+    ) -> ProxyClientStream<S>
     where
         A: Into<Address>,
     {
@@ -160,6 +185,7 @@ where
             svr_cfg.method(),
             svr_cfg.key(),
             svr_cfg.identity_keys(),
+            user_manager_rcv,
             None,
         );
 
@@ -179,6 +205,7 @@ where
             writer_state: ProxyClientStreamWriteState::Connect(addr),
             reader_state,
             context,
+            user_manager_rcv,
         }
     }
 
@@ -203,7 +230,11 @@ where
     S: AsyncRead + AsyncWrite + Unpin,
 {
     #[inline]
-    fn poll_read(self: Pin<&mut Self>, cx: &mut task::Context<'_>, buf: &mut ReadBuf<'_>) -> Poll<io::Result<()>> {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut task::Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
         #[allow(unused_mut)]
         let mut this = self.project();
 
@@ -213,12 +244,12 @@ where
                 ProxyClientStreamReadState::Established => {
                     return this
                         .stream
-                        .poll_read_decrypted(cx, this.context, buf)
+                        .poll_read_decrypted(cx, this.context, buf, this.user_manager_rcv)
                         .map_err(Into::into);
                 }
                 #[cfg(feature = "aead-cipher-2022")]
                 ProxyClientStreamReadState::CheckRequestNonce => {
-                    ready!(this.stream.as_mut().poll_read_decrypted(cx, this.context, buf))?;
+                    ready!(this.stream.as_mut().poll_read_decrypted(cx, this.context, buf, this.user_manager_rcv))?;
 
                     // REQUEST_NONCE should be in the respond packet (header) of AEAD-2022.
                     //

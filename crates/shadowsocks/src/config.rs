@@ -2,16 +2,10 @@
 
 #[cfg(unix)]
 use std::path::PathBuf;
-use std::{
-    collections::HashMap,
-    error,
-    fmt::{self, Debug, Display},
-    net::SocketAddr,
-    str::{self, FromStr},
-    sync::Arc,
-    time::Duration,
-};
+use std::{collections::HashMap, error, fmt::{self, Debug, Display}, io, net::SocketAddr, str::{self, FromStr}, sync::Arc, time::Duration};
+use crate::manager::protocol::ServerConfigOther;
 
+use std::sync::Mutex;
 use base64::Engine as _;
 use byte_string::ByteStr;
 use bytes::Bytes;
@@ -20,6 +14,8 @@ use log::{debug, error, warn};
 // use serde::de::Unexpected::Str;
 use thiserror::Error;
 use url::{self, Url};
+use tokio::sync::mpsc;
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
 #[cfg(any(feature = "stream-cipher", feature = "aead-cipher"))]
 use crate::crypto::v1::openssl_bytes_to_key;
@@ -341,7 +337,31 @@ impl ServerUserManager {
     pub fn new(name: &str) -> ServerUserManager {
         ServerUserManager { name: name.into(), users: HashMap::new() }
     }
+    pub fn from_server_config_other(server_config: ServerConfigOther) -> io::Result<ServerUserManager> {
+        let mut user_manager = ServerUserManager::new("WithUsers!");
+        if let Some(ref users) = server_config.users {
+            for user in users.iter() {
+                let user = match ServerUser::with_encoded_key(&user.name, &user.password) {
+                    Ok(u) => u,
+                    Err(..) => {
+                        error!(
+                        "users[].password must be encoded with base64, but found: {}",
+                        user.password
+                    );
 
+                        return Err(io::Error::new(
+                            io::ErrorKind::Other,
+                            "users[].password must be encoded with base64",
+                        ));
+                    }
+                };
+
+                user_manager.add_user(user);
+            }
+
+        }
+        Ok(user_manager)
+    }
     /// Add a new user
     pub fn add_user(&mut self, user: ServerUser) {
         debug!("<< add user: {:?} = {:?}", user.name, user.clone_identity_hash());
@@ -407,6 +427,7 @@ pub struct ServerConfig {
     /// Extensible Identity Headers (AEAD-2022)
     ///
     /// For server, support multi-users with EIH
+    user_manager_consumer: Option<UnboundedSender<Option<ServerUserManager>>>,
     user_manager: Option<Arc<ServerUserManager>>,
 
     /// Plugin config
@@ -565,6 +586,7 @@ impl ServerConfig {
             method,
             enc_key,
             identity_keys: Arc::new(identity_keys),
+            user_manager_consumer: None,
             user_manager: None,
             timeout: None,
             plugin: None,
@@ -630,11 +652,22 @@ impl ServerConfig {
     }
 
     /// Set user manager, enable Server's multi-user support with EIH
-    pub fn set_user_manager(&mut self, user_manager: ServerUserManager) {
-        self.user_manager = Some(Arc::new(user_manager));
-    }
+    // pub fn set_user_manager(&mut self, user_manager: ServerUserManager) {
+    //     self.user_manager = Some(Arc::new(user_manager));
+    // }
+    pub fn set_user_manager(&mut self, user_manager: Option<ServerUserManager>) {
+        match user_manager {
+            None => self.user_manager = None,
 
-    /// Get user manager (Server)
+            Some(um) => {
+                self.user_manager = Some(Arc::new(um));
+            }
+        }
+    }
+    // self.user_manager = Some(Arc::new(Mutex::new(user_manager)));
+
+
+        /// Get user manager (Server)
     pub fn user_manager(&self) -> Option<&ServerUserManager> {
         self.user_manager.as_deref()
     }

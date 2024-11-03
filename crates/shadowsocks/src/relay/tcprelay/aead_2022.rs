@@ -52,6 +52,7 @@ use std::{
     task::{self, Poll},
     time::SystemTime,
 };
+use tokio::sync::mpsc::UnboundedReceiver;
 
 use aes::{
     cipher::{BlockDecrypt, BlockEncrypt, KeyInit},
@@ -60,15 +61,17 @@ use aes::{
 use byte_string::ByteStr;
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use futures::ready;
-use log::{error, trace};
+use log::{debug, error, trace};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
-
+use tokio::task::JoinHandle;
 use super::{crypto_io::StreamType, proxy_stream::protocol::v2::SERVER_STREAM_TIMESTAMP_MAX_DIFF};
 use crate::{
     config::{method_support_eih, ServerUserManager},
     context::Context,
     crypto::{v2::tcp::TcpCipher, CipherKind},
 };
+use crate::config::ServerUser;
+use crate::manager::protocol::ServerConfigOther;
 
 #[inline]
 fn get_now_timestamp() -> u64 {
@@ -135,21 +138,42 @@ pub struct DecryptedReader {
     salt: Option<Bytes>,
     request_salt: Option<Bytes>,
     data_chunk_count: u64,
-    user_manager: Option<Arc<ServerUserManager>>,
+    // user_manager_rcv: Option<Arc<UnboundedReceiver<ServerUserManager>>>,
+    // user_manager: Option<Arc<ServerUserManager>>,
     user_key: Option<Bytes>,
     has_handshaked: bool,
 }
 
 impl DecryptedReader {
-    pub fn new(stream_ty: StreamType, method: CipherKind, key: &[u8]) -> DecryptedReader {
-        DecryptedReader::with_user_manager(stream_ty, method, key, None)
-    }
+    // pub fn new(stream_ty: StreamType, method: CipherKind, key: &[u8]) -> DecryptedReader {
+    //     // todo, pass in and initialize receiver here!!
+    //     DecryptedReader::with_user_manager(stream_ty, method, key, None, None)
+    // }
+
+    // todo, where do I call this? <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+    // pub fn set_user_manager_receiver(&mut self, mut receiver: Option<UnboundedReceiver<ServerUserManager>>) -> JoinHandle<()> {
+    //     tokio::spawn(async move {
+    //         // todo maybe do the thing here!!
+    //         if let Some(mut receiver) = receiver {
+    //             loop {
+    //                 match receiver.recv().await {
+    //                     Some(m) => {
+    //                         debug!("received config config from remote {:?}", m);
+    //                         self.user_manager = Some(Arc::new(m));
+    //                     }
+    //                     None => self.user_manager = None
+    //                 }
+    //             }
+    //         }
+    //     })
+    //     // self.user_manager_rcv = Some(receiver);
+    // }
 
     pub fn with_user_manager(
         stream_ty: StreamType,
         method: CipherKind,
         key: &[u8],
-        user_manager: Option<Arc<ServerUserManager>>,
+        // user_manager: Option<Arc<ServerUserManager>>,
     ) -> DecryptedReader {
         if method.salt_len() > 0 {
             DecryptedReader {
@@ -163,7 +187,7 @@ impl DecryptedReader {
                 salt: None,
                 request_salt: None,
                 data_chunk_count: 0,
-                user_manager,
+                // user_manager,
                 user_key: None,
                 has_handshaked: false,
             }
@@ -179,7 +203,7 @@ impl DecryptedReader {
                 salt: None,
                 request_salt: None,
                 data_chunk_count: 0,
-                user_manager,
+                // user_manager,
                 user_key: None,
                 has_handshaked: false,
             }
@@ -201,6 +225,7 @@ impl DecryptedReader {
         context: &Context,
         stream: &mut S,
         buf: &mut ReadBuf<'_>,
+        user_manager: Option<&ServerUserManager>,
     ) -> Poll<ProtocolResult<()>>
     where
         S: AsyncRead + Unpin + ?Sized,
@@ -209,7 +234,7 @@ impl DecryptedReader {
             match self.state {
                 DecryptReadState::ReadHeader { ref key } => {
                     let key = unsafe { &*(key.as_ref() as *const _) };
-                    match ready!(self.poll_read_header(cx, context, stream, key))? {
+                    match ready!(self.poll_read_header(cx, context, stream, key, user_manager))? {
                         None => {
                             return Ok(()).into();
                         }
@@ -263,6 +288,7 @@ impl DecryptedReader {
         context: &Context,
         stream: &mut S,
         key: &[u8],
+        user_manager: Option<&ServerUserManager>,
     ) -> Poll<ProtocolResult<Option<usize>>>
     where
         S: AsyncRead + Unpin + ?Sized,
@@ -275,7 +301,7 @@ impl DecryptedReader {
             StreamType::Server => 0,
         };
         let require_eih =
-            self.stream_ty == StreamType::Server && method_support_eih(self.method) && self.user_manager.is_some();
+            self.stream_ty == StreamType::Server && method_support_eih(self.method) && user_manager.is_some();
         let eih_len = if require_eih { 16 } else { 0 };
         let header_len = salt_len + eih_len + 1 + 8 + request_salt_len + 2 + self.method.tag_len();
         if self.buffer.len() < header_len {
@@ -298,7 +324,8 @@ impl DecryptedReader {
         // Extensible Identity Header
         // https://github.com/Shadowsocks-NET/shadowsocks-specs/blob/main/2022-2-shadowsocks-2022-extensible-identity-headers.md
         let mut cipher = if require_eih {
-            if let Some(ref user_manager) = self.user_manager {
+            // if let Some(ref user_manager) = self.user_manager {
+            if let Some(user_manager) = user_manager {
                 // Assume we have at least 1 EIH
                 if header_chunk.len() < 16 {
                     error!("expecting EIH, but header chunk len: {}", header_chunk.len());
@@ -331,6 +358,9 @@ impl DecryptedReader {
                 );
 
                 match user_manager.get_user_by_hash(user_hash) {
+                    // TODO!!! Im here so keep going. need to unlock user manager here!!
+                    // match user_manager.clone_user_by_hash(user_hash) {
+
                     None => {
                         return Err(ProtocolError::InvalidClientUser(Bytes::copy_from_slice(user_hash))).into();
                     }

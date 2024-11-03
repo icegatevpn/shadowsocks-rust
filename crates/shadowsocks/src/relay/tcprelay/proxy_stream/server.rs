@@ -11,7 +11,7 @@ use bytes::Bytes;
 use futures::ready;
 use pin_project::pin_project;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
-
+use tokio::sync::mpsc::UnboundedReceiver;
 use crate::{
     config::ServerUserManager,
     context::SharedContext,
@@ -41,6 +41,7 @@ pub struct ProxyServerStream<S> {
     context: SharedContext,
     writer_state: ProxyServerStreamWriteState,
     has_handshaked: bool,
+    user_manager_rcv: Option<UnboundedReceiver<ServerUserManager>>,
 }
 
 impl<S> ProxyServerStream<S> {
@@ -68,6 +69,7 @@ impl<S> ProxyServerStream<S> {
 
         #[cfg(not(feature = "aead-cipher-2022"))]
         let writer_state = ProxyServerStreamWriteState::Established;
+        let um_clone = user_manager.clone();
 
         static EMPTY_IDENTITY: [Bytes; 0] = [];
         ProxyServerStream {
@@ -83,6 +85,7 @@ impl<S> ProxyServerStream<S> {
             context,
             writer_state,
             has_handshaked: false,
+            user_manager_rcv: um_clone
         }
     }
 
