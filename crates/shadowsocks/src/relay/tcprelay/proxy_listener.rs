@@ -5,10 +5,12 @@ use arc_swap::{ArcSwap, ArcSwapAny, ArcSwapOption, Guard};
 use arc_swap::access::{Access, DynAccess};
 use log::debug;
 use once_cell::sync::Lazy;
+use tokio::sync::RwLock;
 use tokio::{
     io::{AsyncRead, AsyncWrite},
     net::TcpStream,
 };
+use futures::executor::block_on;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::task::JoinHandle;
 use crate::{
@@ -28,7 +30,8 @@ pub struct ProxyListener {
     context: SharedContext,
     // user_manager: Option<ServerUserManager>,
     // user_manager_thing: Arc<ArcSwapAny<Arc<ArcSwap<ServerUserManager>>>>
-    user_manager_thing: Arc<ArcSwapAny<Arc<ArcSwap<ServerUserManager>>>>
+    user_manager_thing: Arc<RwLock<ServerUserManager>>, // todo make this an ArcSwap!!! 
+    // user_manager_thing: Arc<ArcSwapAny<Arc<ArcSwap<ServerUserManager>>>>
 }
 
 
@@ -65,13 +68,15 @@ impl ProxyListener {
     pub fn listen_for_users(&mut self, mut user_manager_rcv: UnboundedReceiver<ServerUserManager>)
                             -> JoinHandle<()> {
 
+        let um_in = Arc::clone(&self.user_manager_thing);
+
         tokio::spawn(async move {
             /*
               ********************************** todo  DO SOME MAGIC!!! ********************************
               todo just use an RW Lock!! get that working first
              */
 
-            let um_in = Arc::clone(&self.user_manager_thing);
+
             loop {
                 let um = user_manager_rcv.recv().await;
                 debug!("received config from remote {:?}", um);
@@ -79,11 +84,9 @@ impl ProxyListener {
 
                 match um {
                     Some(userMAN) => {
-                        let um = Arc::new(ArcSwap::from(userMAN));
-                        // let new = Arc::new(ArcSwap::from_pointee(um));
-                        // let new = Arc::new(userMAN);
-                        // um_in.store(userMAN);
-                        um_in.store(um);
+                        let um = userMAN;
+                        debug!("<< write new user manager>>");
+                        let s = *um_in.write().await = um;
                     }
                     None => {}
                 }
@@ -119,7 +122,7 @@ impl ProxyListener {
             key: svr_cfg.key().to_vec().into_boxed_slice(),
             context,
             // user_manager_thing: Arc::new(ArcSwap::from(ServerUserManager::default()))
-            user_manager_thing: Arc::new(ArcSwap::from(ServerUserManager::default()))
+            user_manager_thing: Arc::new(RwLock::from(ServerUserManager::default()))
             // user_manager: svr_cfg.box_user_manager(),
         }
     }

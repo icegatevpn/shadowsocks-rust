@@ -121,6 +121,7 @@ impl ServerBuilder {
     /// 2. Starts TCP server (listener)
     /// 3. Starts UDP server (listener)
     pub async fn build(mut self) -> io::Result<Server> {
+        // todo you almost have a working Rwlock solution! then we can move from there!!
         let mut plugin = None;
 
         if let Some(plugin_cfg) = self.svr_cfg.plugin() {

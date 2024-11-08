@@ -7,7 +7,7 @@ use std::{
     sync::Arc,
     task::{self, Poll},
 };
-
+use blake3::IncrementCounter::No;
 #[cfg(any(feature = "stream-cipher", feature = "aead-cipher", feature = "aead-cipher-2022"))]
 use byte_string::ByteStr;
 use bytes::Bytes;
@@ -17,12 +17,13 @@ use log::trace;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use libc::{raise, read};
 use tokio::sync::mpsc::UnboundedReceiver;
-
+use tokio::sync::RwLock;
 use crate::{
     config::ServerUserManager,
     context::Context,
     crypto::{CipherCategory, CipherKind},
 };
+use futures::executor::block_on;
 use crate::manager::protocol::ServerConfigOther;
 
 #[cfg(feature = "aead-cipher")]
@@ -392,7 +393,7 @@ impl<S> CryptoStream<S> {
         method: CipherKind,
         key: &'a[u8],
         identity_keys: &[Bytes],
-        user_manager: Option<Box<ServerUserManager>>
+        user_manager: Option<Arc<RwLock<ServerUserManager>>>
     ) -> CryptoStream<S> {
         let category = method.category();
 
@@ -442,11 +443,20 @@ impl<S> CryptoStream<S> {
                 local_salt
             }
         };
+        let mut um_clone: Option<Box<ServerUserManager>> = None;
+        block_on(async {
+            if let Some(user_manager) = user_manager {
+                let uu = user_manager.read().await;
+                let uuu = &*uu;
+                um_clone = Some(Box::from(uuu.to_owned()));
+            }
+
+        });
 
         // New each packet!!
         CryptoStream {
             stream,
-            dec: DecryptedReader::with_user_manager(stream_ty, method, key, user_manager),
+            dec: DecryptedReader::with_user_manager(stream_ty, method, key, um_clone),
             enc: EncryptedWriter::with_identity(stream_ty, method, key, &iv, identity_keys),
             method,
             has_handshaked: false,
