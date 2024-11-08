@@ -281,7 +281,7 @@ impl Manager {
     // }
 
     // async fn add_server_builtin(&self, svr_cfg: ServerConfig) {
-    async fn add_server_builtin(&self, mut svr_cfg: ServerConfig, config_receiver: Option<UnboundedReceiver<ServerConfigOther>>) {
+    async fn add_server_builtin(&self, mut svr_cfg: ServerConfig) {
         // Each server should use a separate Context, but shares
         //
         // * AccessControlList
@@ -354,29 +354,29 @@ impl Manager {
         let abortable = tokio::spawn(async move {
             // consumer for
             // inner handle for receiving manager_configs
-            match config_receiver {
-                None => {}
-                Some(mut r) => {
-                    tokio::spawn(async move {
-                        // Start process receiving new configs!!
-                        match r.recv().await {
-                            Some(new_config) => {
-                                // todo gen usermanager
-                                match Self::user_manager_with_users(&new_config) {
-                                    Ok(manager) => {
-                                        svr_cfg.set_user_manager(Some(manager));
-                                    }
-                                    Err(e) => { error!("failed to set user manager", e); }
-                                }
-
-                            }
-                            None => {
-                                svr_cfg.set_user_manager(None);//svr_cfg() = None;
-                            }
-                        }
-                    });
-                }
-            }
+            // match config_receiver {
+            //     None => {}
+            //     Some(mut r) => {
+            //         tokio::spawn(async move {
+            //             // Start process receiving new configs!!
+            //             match r.recv().await {
+            //                 Some(new_config) => {
+            //                     // todo gen usermanager
+            //                     match Self::user_manager_with_users(&new_config) {
+            //                         Ok(manager) => {
+            //                             svr_cfg.set_user_manager(Some(manager));
+            //                         }
+            //                         Err(e) => { error!("failed to set user manager: {}", e); }
+            //                     }
+            //
+            //                 }
+            //                 None => {
+            //                     svr_cfg.set_user_manager(None);//svr_cfg() = None;
+            //                 }
+            //             }
+            //         });
+            //     }
+            // }
 
             server.run().await
         });
@@ -692,7 +692,7 @@ impl Manager {
 
         match Self::user_manager_with_users(req) {
             Ok(manager) => {
-                svr_cfg.set_user_manager(manager);
+                svr_cfg.set_user_manager(Some(manager));
             }
             Err(e) => {
                 return Err(e);

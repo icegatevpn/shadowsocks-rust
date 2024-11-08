@@ -41,7 +41,6 @@ pub struct ProxyServerStream<S> {
     context: SharedContext,
     writer_state: ProxyServerStreamWriteState,
     has_handshaked: bool,
-    user_manager_rcv: Option<UnboundedReceiver<ServerUserManager>>,
 }
 
 impl<S> ProxyServerStream<S> {
@@ -58,7 +57,7 @@ impl<S> ProxyServerStream<S> {
         stream: S,
         method: CipherKind,
         key: &[u8],
-        user_manager: Option<Arc<ServerUserManager>>,
+        user_manager: Option<Arc<ServerUserManager>>
     ) -> ProxyServerStream<S> {
         #[cfg(feature = "aead-cipher-2022")]
         let writer_state = if method.is_aead_2022() {
@@ -69,9 +68,12 @@ impl<S> ProxyServerStream<S> {
 
         #[cfg(not(feature = "aead-cipher-2022"))]
         let writer_state = ProxyServerStreamWriteState::Established;
-        let um_clone = user_manager.clone();
 
         static EMPTY_IDENTITY: [Bytes; 0] = [];
+        // let um = match user_manager {
+        //     None => { None }
+        //     Some(mm) => {Some(Box::new(mm.clone()))}
+        // };
         ProxyServerStream {
             stream: CryptoStream::from_stream_with_identity(
                 &context,
@@ -85,7 +87,6 @@ impl<S> ProxyServerStream<S> {
             context,
             writer_state,
             has_handshaked: false,
-            user_manager_rcv: um_clone
         }
     }
 

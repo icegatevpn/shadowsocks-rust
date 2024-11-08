@@ -83,7 +83,7 @@ pub struct ProxySocket<S> {
     recv_timeout: Option<Duration>,
     context: SharedContext,
     identity_keys: Arc<Vec<Bytes>>,
-    user_manager: Option<Arc<ServerUserManager>>,
+    user_manager: Option<Box<ServerUserManager>>,
     strict: bool
 }
 
@@ -186,9 +186,10 @@ impl<S> ProxySocket<S> {
                 UdpSocketType::Client => svr_cfg.clone_identity_keys(),
                 UdpSocketType::Server => Arc::new(Vec::new()),
             },
+            // todo:: trace this down for UDP NOW!!! :(
             user_manager: match socket_type {
                 UdpSocketType::Client => None,
-                UdpSocketType::Server => svr_cfg.clone_user_manager(),
+                UdpSocketType::Server => svr_cfg.box_user_manager(),
             },
             strict
         }
@@ -450,6 +451,7 @@ where
         &self,
         recv_buf: &mut [u8],
         // pass in fixed user_manager option for each buffer (not receiver)
+        // todo :: Trace this back!! find where long running process can pass UserMangerUpdates!!
         user_manager: Option<&ServerUserManager>,
         strict: &bool,
     ) -> ProtocolResult<(usize, Address, Option<UdpSocketControlData>)> {

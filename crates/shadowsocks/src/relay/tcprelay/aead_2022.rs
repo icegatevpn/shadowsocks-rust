@@ -138,8 +138,6 @@ pub struct DecryptedReader {
     salt: Option<Bytes>,
     request_salt: Option<Bytes>,
     data_chunk_count: u64,
-    // user_manager_rcv: Option<Arc<UnboundedReceiver<ServerUserManager>>>,
-    // user_manager: Option<Arc<ServerUserManager>>,
     user_key: Option<Bytes>,
     has_handshaked: bool,
 }
@@ -150,30 +148,10 @@ impl DecryptedReader {
     //     DecryptedReader::with_user_manager(stream_ty, method, key, None, None)
     // }
 
-    // todo, where do I call this? <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
-    // pub fn set_user_manager_receiver(&mut self, mut receiver: Option<UnboundedReceiver<ServerUserManager>>) -> JoinHandle<()> {
-    //     tokio::spawn(async move {
-    //         // todo maybe do the thing here!!
-    //         if let Some(mut receiver) = receiver {
-    //             loop {
-    //                 match receiver.recv().await {
-    //                     Some(m) => {
-    //                         debug!("received config config from remote {:?}", m);
-    //                         self.user_manager = Some(Arc::new(m));
-    //                     }
-    //                     None => self.user_manager = None
-    //                 }
-    //             }
-    //         }
-    //     })
-    //     // self.user_manager_rcv = Some(receiver);
-    // }
-
     pub fn with_user_manager(
         stream_ty: StreamType,
         method: CipherKind,
         key: &[u8],
-        // user_manager: Option<Arc<ServerUserManager>>,
     ) -> DecryptedReader {
         if method.salt_len() > 0 {
             DecryptedReader {
@@ -225,7 +203,7 @@ impl DecryptedReader {
         context: &Context,
         stream: &mut S,
         buf: &mut ReadBuf<'_>,
-        user_manager: Option<&ServerUserManager>,
+        user_manager: &Option<Box<ServerUserManager>>,
     ) -> Poll<ProtocolResult<()>>
     where
         S: AsyncRead + Unpin + ?Sized,
@@ -234,7 +212,7 @@ impl DecryptedReader {
             match self.state {
                 DecryptReadState::ReadHeader { ref key } => {
                     let key = unsafe { &*(key.as_ref() as *const _) };
-                    match ready!(self.poll_read_header(cx, context, stream, key, user_manager))? {
+                    match ready!(self.poll_read_header(cx, context, stream, key, user_manager.clone()))? {
                         None => {
                             return Ok(()).into();
                         }
@@ -288,7 +266,7 @@ impl DecryptedReader {
         context: &Context,
         stream: &mut S,
         key: &[u8],
-        user_manager: Option<&ServerUserManager>,
+        user_manager: Option<Box<ServerUserManager>>,
     ) -> Poll<ProtocolResult<Option<usize>>>
     where
         S: AsyncRead + Unpin + ?Sized,

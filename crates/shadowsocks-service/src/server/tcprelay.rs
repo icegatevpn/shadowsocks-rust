@@ -7,7 +7,7 @@ use std::{
     sync::Arc,
     time::Duration,
 };
-
+use std::thread::JoinHandle;
 use log::{debug, error, info, trace, warn};
 use shadowsocks::{
     crypto::CipherKind,
@@ -20,7 +20,8 @@ use tokio::{
     net::TcpStream as TokioTcpStream,
     time,
 };
-
+use tokio::sync::mpsc::UnboundedReceiver;
+use shadowsocks::config::ServerUserManager;
 use crate::net::{utils::ignore_until_end, MonProxyStream};
 
 use super::context::ServiceContext;
@@ -29,6 +30,7 @@ use super::context::ServiceContext;
 pub struct TcpServer {
     context: Arc<ServiceContext>,
     svr_cfg: ServerConfig,
+    user_manager_rcv: Option<UnboundedReceiver<ServerUserManager>>,
     listener: ProxyListener,
 }
 
@@ -36,12 +38,15 @@ impl TcpServer {
     pub(crate) async fn new(
         context: Arc<ServiceContext>,
         svr_cfg: ServerConfig,
+        user_manager_rcv: Option<UnboundedReceiver<ServerUserManager>>,
         accept_opts: AcceptOpts,
     ) -> io::Result<TcpServer> {
         let listener = ProxyListener::bind_with_opts(context.context(), &svr_cfg, accept_opts).await?;
         Ok(TcpServer {
             context,
             svr_cfg,
+            // todo, pass user manager receiver to listener !!!! **** Fing doit!!!
+            user_manager_rcv,
             listener,
         })
     }
@@ -57,14 +62,35 @@ impl TcpServer {
     }
 
     /// Start server's accept loop
-    pub async fn run(self) -> io::Result<()> {
+    pub async fn run(mut self) -> io::Result<()> {
         info!(
             "shadowsocks tcp server listening on {}, inbound address {}",
             self.listener.local_addr().expect("listener.local_addr"),
             self.svr_cfg.addr()
         );
+        // // todo, move this into the listener
+        // tokio::spawn(async move {
+        //     if let Some(mut receiver) = self.user_manager_rcv {
+        //         loop {
+        //             match receiver.recv().await {
+        //                 Some(m) => {
+        //                     debug!("received config from remote {:?}", m);
+        //                     self.listener.set_user_manager(Some(m));
+        //                     // self.user_manager = Some(Arc::new(m));
+        //                 }
+        //                 None => self.listener.set_user_manager(None)
+        //             }
+        //         }
+        //     }
+        // });
+
+        let listening = match self.user_manager_rcv.take() {
+            Some(receiver) => Some(self.listener.listen_for_users(receiver)),
+            None => None
+        };
 
         loop {
+            debug!("Still listening for user manager: {:?}",listening.is_some());
             let flow_stat = self.context.flow_stat();
 
             let (local_stream, peer_addr) = match self
@@ -99,6 +125,7 @@ impl TcpServer {
                 }
             });
         }
+
     }
 }
 

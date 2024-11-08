@@ -140,9 +140,9 @@ impl UdpServer {
     }
 
     /// Server's configuration
-    pub fn server_config(&self) -> &ServerConfig {
-        &self.svr_cfg
-    }
+    // pub fn server_config(&self) -> &ServerConfig {
+    //     &self.svr_cfg
+    // }
 
     /// Server's listen address
     pub fn local_addr(&self) -> io::Result<SocketAddr> {
@@ -151,6 +151,7 @@ impl UdpServer {
 
     /// Start server's accept loop
     pub async fn run(mut self) -> io::Result<()> {
+        //todo listen to serverUserManger here!!
         info!(
             "shadowsocks udp server listening on {}, inbound address {}",
             self.local_addr().expect("listener.local_addr"),

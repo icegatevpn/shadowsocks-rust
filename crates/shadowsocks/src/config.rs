@@ -428,7 +428,7 @@ pub struct ServerConfig {
     ///
     /// For server, support multi-users with EIH
     user_manager_consumer: Option<UnboundedSender<Option<ServerUserManager>>>,
-    user_manager: Option<Arc<ServerUserManager>>,
+    user_manager: Option<ServerUserManager>,
 
     /// Plugin config
     plugin: Option<PluginConfig>,
@@ -656,24 +656,32 @@ impl ServerConfig {
     //     self.user_manager = Some(Arc::new(user_manager));
     // }
     pub fn set_user_manager(&mut self, user_manager: Option<ServerUserManager>) {
-        match user_manager {
-            None => self.user_manager = None,
-
-            Some(um) => {
-                self.user_manager = Some(Arc::new(um));
-            }
-        }
+        self.user_manager = user_manager;
+        // match user_manager {
+        //     None => self.user_manager = None,
+        //
+        //     Some(um) => {
+        //         self.user_manager = Some(um);
+        //     }
+        // }
     }
     // self.user_manager = Some(Arc::new(Mutex::new(user_manager)));
 
 
         /// Get user manager (Server)
     pub fn user_manager(&self) -> Option<&ServerUserManager> {
-        self.user_manager.as_deref()
+        self.user_manager()
+    }
+
+    pub fn box_user_manager(&self) -> Option<Box<ServerUserManager>> {
+        match self.user_manager() {
+            Some(u) => Some(Box::new(u.clone())),
+            None => None,
+        }
     }
 
     /// Clone user manager (Server)
-    pub fn clone_user_manager(&self) -> Option<Arc<ServerUserManager>> {
+    pub fn clone_user_manager(&self) -> Option<ServerUserManager> {
         self.user_manager.clone()
     }
 
