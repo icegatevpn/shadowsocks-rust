@@ -2078,7 +2078,7 @@ impl Config {
                         user_manager.add_user(user);
                     }
 
-                    nsvr.set_user_manager(Some(user_manager));
+                    nsvr.set_user_manager(user_manager);
                 }
 
                 match svr.mode {

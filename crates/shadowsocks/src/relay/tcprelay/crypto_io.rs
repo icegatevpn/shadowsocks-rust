@@ -7,7 +7,7 @@ use std::{
     sync::Arc,
     task::{self, Poll},
 };
-use blake3::IncrementCounter::No;
+
 #[cfg(any(feature = "stream-cipher", feature = "aead-cipher", feature = "aead-cipher-2022"))]
 use byte_string::ByteStr;
 use bytes::Bytes;
@@ -84,23 +84,22 @@ pub enum DecryptedReader {
     #[cfg(feature = "stream-cipher")]
     Stream(StreamDecryptedReader),
     #[cfg(feature = "aead-cipher-2022")]
-    Aead2022(Aead2022DecryptedReader, Option<Box<ServerUserManager>>),
+    Aead2022(Aead2022DecryptedReader, Option<Arc<ServerUserManager>>),
     // Aead2022(Aead2022DecryptedReader)
 }
 
-impl DecryptedReader<> {
+impl DecryptedReader {
     /// Create a new reader for reading encrypted data
-    // pub fn new(stream_ty: StreamType, method: CipherKind, key: &[u8]) -> DecryptedReader {
-    //     DecryptedReader::with_user_manager(stream_ty, method, key, None)
-    // }
+    pub fn new(stream_ty: StreamType, method: CipherKind, key: &[u8]) -> DecryptedReader {
+        DecryptedReader::with_user_manager(stream_ty, method, key, None)
+    }
 
     /// Create a new reader for reading encrypted data
     pub fn with_user_manager( // called for each packet!!
         stream_ty: StreamType,
         method: CipherKind,
         key: &[u8],
-        // user_manager: Option<Arc<ServerUserManager>>,
-         user_manager: Option<Box<ServerUserManager>>,
+        user_manager: Option<Arc<ServerUserManager>>,
     ) -> DecryptedReader {
         if cfg!(not(feature = "aead-cipher-2022")) {
             let _ = stream_ty;
@@ -119,10 +118,6 @@ impl DecryptedReader<> {
             }
             #[cfg(feature = "aead-cipher-2022")]
             CipherCategory::Aead2022 => {
-                // let um = match user_manager {
-                //     None => {None}
-                //     Some(uu) => { Some(&(*uu.clone()))}
-                // };
                 DecryptedReader::Aead2022(Aead2022DecryptedReader::with_user_manager(
                     stream_ty,
                     method,
@@ -144,7 +139,7 @@ impl DecryptedReader<> {
     where
         S: AsyncRead + Unpin + ?Sized,
     {
-        match self {
+        match *self {
             #[cfg(feature = "stream-cipher")]
             DecryptedReader::Stream(ref mut reader) => {
                 reader.poll_read_decrypted(cx, context, stream, buf).map_err(Into::into)
@@ -158,9 +153,7 @@ impl DecryptedReader<> {
                 Pin::new(stream).poll_read(cx, buf).map_err(Into::into)
             }
             #[cfg(feature = "aead-cipher-2022")]
-            DecryptedReader::Aead2022(ref mut reader, manager) => {
-                // reader.set_user_manager_receiver(manager);
-                // reader.poll_read_decrypted(cx, context, stream, buf).map_err(Into::into)
+            DecryptedReader::Aead2022(ref mut reader, ref manager) => {
                 reader.poll_read_decrypted(cx, context, stream, buf, manager).map_err(Into::into)
 
             }
@@ -374,26 +367,26 @@ impl<S> CryptoStream<S> {
     //     self.dec.set
     // }
     /// Create a new CryptoStream with the underlying stream connection
-    pub fn from_stream<'a>(
-        context: &'a Context,
-        stream: S,
-        stream_ty: StreamType,
-        method: CipherKind,
-        key: &'a[u8],
-    ) -> CryptoStream<S> {
-        static EMPTY_IDENTITY: [Bytes; 0] = [];
-        CryptoStream::from_stream_with_identity(context, stream, stream_ty, method, key, &EMPTY_IDENTITY, None)
-    }
-
-    /// Create a new CryptoStream with the underlying stream connection
-    pub fn from_stream_with_identity<'a>(
+    pub fn from_stream(
         context: &Context,
         stream: S,
         stream_ty: StreamType,
         method: CipherKind,
-        key: &'a[u8],
+        key: &[u8],
+    ) -> CryptoStream<S> {
+        static EMPTY_IDENTITY: [Bytes; 0] = [];
+        CryptoStream::from_stream_with_identity(context, stream, stream_ty, method, key, &EMPTY_IDENTITY, &None)
+    }
+
+    /// Create a new CryptoStream with the underlying stream connection
+    pub fn from_stream_with_identity(
+        context: &Context,
+        stream: S,
+        stream_ty: StreamType,
+        method: CipherKind,
+        key: &[u8],
         identity_keys: &[Bytes],
-        user_manager: Option<Arc<RwLock<ServerUserManager>>>
+        user_manager: &Option<Arc<RwLock<ServerUserManager>>>
     ) -> CryptoStream<S> {
         let category = method.category();
 
@@ -443,14 +436,15 @@ impl<S> CryptoStream<S> {
                 local_salt
             }
         };
-        let mut um_clone: Option<Box<ServerUserManager>> = None;
+
+        let mut um_clone: Option<Arc<ServerUserManager>> = None;
+
         block_on(async {
             if let Some(user_manager) = user_manager {
                 let uu = user_manager.read().await;
                 let uuu = &*uu;
-                um_clone = Some(Box::from(uuu.to_owned()));
+                um_clone = Some(Arc::from(uuu.to_owned()));
             }
-
         });
 
         // New each packet!!
@@ -581,9 +575,9 @@ where
             ref mut has_handshaked,
             ..
         } = *self;
-        // ready!(dec.poll_read_decrypted(cx, context, stream, buf))?;
-        let ff = dec.poll_read_decrypted(cx, context, stream, buf);
-        ready!(ff)?;
+        ready!(dec.poll_read_decrypted(cx, context, stream, buf))?;
+        // let ff = dec.poll_read_decrypted(cx, context, stream, buf);
+        // ready!(ff)?;
 
 
         if !*has_handshaked && dec.handshaked() {

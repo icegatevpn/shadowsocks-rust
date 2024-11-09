@@ -83,7 +83,7 @@ pub struct ProxySocket<S> {
     recv_timeout: Option<Duration>,
     context: SharedContext,
     identity_keys: Arc<Vec<Bytes>>,
-    user_manager: Option<Box<ServerUserManager>>,
+    user_manager: Option<Arc<ServerUserManager>>,
     strict: bool
 }
 
@@ -189,7 +189,7 @@ impl<S> ProxySocket<S> {
             // todo:: trace this down for UDP NOW!!! :(
             user_manager: match socket_type {
                 UdpSocketType::Client => None,
-                UdpSocketType::Server => svr_cfg.box_user_manager(),
+                UdpSocketType::Server => svr_cfg.clone_user_manager(),
             },
             strict
         }

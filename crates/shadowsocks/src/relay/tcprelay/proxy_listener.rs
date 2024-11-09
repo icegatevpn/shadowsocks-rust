@@ -28,10 +28,7 @@ pub struct ProxyListener {
     method: CipherKind,
     key: Box<[u8]>,
     context: SharedContext,
-    // user_manager: Option<ServerUserManager>,
-    // user_manager_thing: Arc<ArcSwapAny<Arc<ArcSwap<ServerUserManager>>>>
     user_manager_thing: Arc<RwLock<ServerUserManager>>, // todo make this an ArcSwap!!!
-    // user_manager_thing: Arc<ArcSwapAny<Arc<ArcSwap<ServerUserManager>>>>
 }
 
 
@@ -39,26 +36,16 @@ static DEFAULT_ACCEPT_OPTS: Lazy<AcceptOpts> = Lazy::new(Default::default);
 
 impl ProxyListener {
 
-    fn user_manager(self)-> Arc<ServerUserManager> {
-
-        //todo this works with no ARC
-        // --
-        let so = ServerUserManager::default();
-        let sso = ArcSwap::from(Arc::new(so));//Arc::new(ArcSwap::from_pointee(so));
-        let st = sso.load();
-        st.clone()
-
-        // let ss:Arc<ServerUserManager> = self.user_manager_thing.load().clone();
-        // let ss:Arc<ServerUserManager> = arc_swap::access::Access::load(&self.user_manager_thing);//.clone();
-        // let ss:ServerUserManager = arc_swap::access::Access::load(&self.user_manager_thing);
-
-        // let sss:ServerUserManager = *(ss.clone());
-        // drop(ss);
-
-        // ss
-
-
-    }
+    // fn user_manager(self)-> Arc<ServerUserManager> {
+    //
+    //     //todo this works with no ARC
+    //     // --
+    //     let so = ServerUserManager::default();
+    //     let sso = ArcSwap::from(Arc::new(so));//Arc::new(ArcSwap::from_pointee(so));
+    //     let st = sso.load();
+    //     st.clone()
+    //
+    // }
 
     /// Create a `ProxyListener` binding to a specific address
     pub async fn bind(context: SharedContext, svr_cfg: &ServerConfig) -> io::Result<ProxyListener> {
@@ -90,8 +77,6 @@ impl ProxyListener {
                     }
                     None => {}
                 }
-
-
             }
         })
     }
@@ -124,14 +109,6 @@ impl ProxyListener {
             user_manager_thing: Arc::new(RwLock::from(ServerUserManager::default()))
         }
     }
-
-    // pub fn set_user_manager(&mut self, user_manager: Option<ServerUserManager>) {
-    //     if let Some(user_manager) = user_manager {
-    //         self.user_manager = Some(Box::new(user_manager));
-    //     } else {
-    //         self.user_manager = None;
-    //     }
-    // }
 
     /// Accepts a shadowsocks' client connection
     #[inline]

@@ -203,7 +203,7 @@ impl DecryptedReader {
         context: &Context,
         stream: &mut S,
         buf: &mut ReadBuf<'_>,
-        user_manager: &Option<Box<ServerUserManager>>,
+        user_manager: &Option<Arc<ServerUserManager>>,
     ) -> Poll<ProtocolResult<()>>
     where
         S: AsyncRead + Unpin + ?Sized,
@@ -266,7 +266,7 @@ impl DecryptedReader {
         context: &Context,
         stream: &mut S,
         key: &[u8],
-        user_manager: Option<Box<ServerUserManager>>,
+        user_manager: Option<Arc<ServerUserManager>>,
     ) -> Poll<ProtocolResult<Option<usize>>>
     where
         S: AsyncRead + Unpin + ?Sized,

@@ -80,7 +80,7 @@ impl<S> ProxyServerStream<S> {
                 method,
                 key,
                 &EMPTY_IDENTITY,
-                user_manager,
+                &user_manager,
             ),
             context,
             writer_state,

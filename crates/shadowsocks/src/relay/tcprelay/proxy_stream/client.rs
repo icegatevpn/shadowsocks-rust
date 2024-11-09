@@ -178,7 +178,7 @@ where
             svr_cfg.method(),
             svr_cfg.key(),
             svr_cfg.identity_keys(),
-            None,
+            &None,
         );
 
         #[cfg(not(feature = "aead-cipher-2022"))]

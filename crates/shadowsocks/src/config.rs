@@ -428,7 +428,7 @@ pub struct ServerConfig {
     ///
     /// For server, support multi-users with EIH
     tcp_user_manager_sender: Option<UnboundedSender<ServerUserManager>>,
-    user_manager: Option<ServerUserManager>,
+    user_manager: Option<Arc<ServerUserManager>>,
 
     /// Plugin config
     plugin: Option<PluginConfig>,
@@ -659,36 +659,28 @@ impl ServerConfig {
     }
 
     /// Set user manager, enable Server's multi-user support with EIH
-    // pub fn set_user_manager(&mut self, user_manager: ServerUserManager) {
-    //     self.user_manager = Some(Arc::new(user_manager));
+    pub fn set_user_manager(&mut self, user_manager: ServerUserManager) {
+        self.user_manager = Some(Arc::new(user_manager));
+    }
+    // pub fn set_user_manager(&mut self, user_manager: Option<ServerUserManager>) {
+    //     self.user_manager = user_manager;
+    //
     // }
-    pub fn set_user_manager(&mut self, user_manager: Option<ServerUserManager>) {
-        self.user_manager = user_manager;
-        // match user_manager {
-        //     None => self.user_manager = None,
-        //
-        //     Some(um) => {
-        //         self.user_manager = Some(um);
-        //     }
-        // }
-    }
-    // self.user_manager = Some(Arc::new(Mutex::new(user_manager)));
 
-
-        /// Get user manager (Server)
+    /// Get user manager (Server)
     pub fn user_manager(&self) -> Option<&ServerUserManager> {
-        self.user_manager()
+        self.user_manager.as_deref()
     }
 
-    pub fn box_user_manager(&self) -> Option<Box<ServerUserManager>> {
-        match self.user_manager() {
-            Some(u) => Some(Box::new(u.clone())),
-            None => None,
-        }
-    }
+    // pub fn box_user_manager(&self) -> Option<Box<ServerUserManager>> {
+    //     match self.user_manager() {
+    //         Some(u) => Some(Box::new(u.clone())),
+    //         None => None,
+    //     }
+    // }
 
     /// Clone user manager (Server)
-    pub fn clone_user_manager(&self) -> Option<ServerUserManager> {
+    pub fn clone_user_manager(&self) -> Option<Arc<ServerUserManager>> {
         self.user_manager.clone()
     }
 
