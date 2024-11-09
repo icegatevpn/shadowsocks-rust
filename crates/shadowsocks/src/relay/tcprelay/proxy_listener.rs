@@ -28,12 +28,14 @@ pub struct ProxyListener {
     method: CipherKind,
     key: Box<[u8]>,
     context: SharedContext,
-    user_manager_thing: Arc<RwLock<ServerUserManager>>, // todo make this an ArcSwap!!!
+    // user_manager_thing: Arc<RwLock<ServerUserManager>>, // todo make this an ArcSwap!!!
+    user_manager_fancy: Arc<ArcSwapAny<Arc<ServerUserManager>>>,
 }
 
 static DEFAULT_ACCEPT_OPTS: Lazy<AcceptOpts> = Lazy::new(Default::default);
 
 impl ProxyListener {
+
 
     /// Create a `ProxyListener` binding to a specific address
     pub async fn bind(context: SharedContext, svr_cfg: &ServerConfig) -> io::Result<ProxyListener> {
@@ -43,7 +45,7 @@ impl ProxyListener {
     pub fn listen_for_users(&mut self, mut user_manager_rcv: UnboundedReceiver<ServerUserManager>)
                             -> JoinHandle<()> {
 
-        let um_in = Arc::clone(&self.user_manager_thing);
+        let um_in = Arc::clone(&self.user_manager_fancy);
 
         tokio::spawn(async move {
             /*
@@ -59,9 +61,11 @@ impl ProxyListener {
 
                 match um {
                     Some(userMAN) => {
+
                         let um = userMAN;
-                        debug!("<< write new user manager >>");
-                        let s = *um_in.write().await = um;
+                        debug!("<< swap new user manager >>");
+                        // let s = *um_in.write().await = um;
+                        um_in.store(Arc::new(um));
                     }
                     None => {}
                 }
@@ -95,7 +99,8 @@ impl ProxyListener {
             method: svr_cfg.method(),
             key: svr_cfg.key().to_vec().into_boxed_slice(),
             context,
-            user_manager_thing: Arc::new(RwLock::from(ServerUserManager::default()))
+            // user_manager_thing: Arc::new(RwLock::from(ServerUserManager::default()))
+            user_manager_fancy: Arc::new(ArcSwap::new(Arc::new(ServerUserManager::default())))
         }
     }
 
@@ -119,7 +124,7 @@ impl ProxyListener {
             stream,
             self.method,
             &self.key,
-            Some(self.user_manager_thing.clone())
+            Some(self.user_manager_fancy.clone())
         );
 
         Ok((stream, peer_addr))

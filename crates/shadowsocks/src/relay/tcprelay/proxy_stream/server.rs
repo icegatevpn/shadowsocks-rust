@@ -6,7 +6,7 @@ use std::{
     sync::Arc,
     task::{self, Poll},
 };
-
+use arc_swap::ArcSwapAny;
 use bytes::Bytes;
 use futures::ready;
 use pin_project::pin_project;
@@ -58,7 +58,7 @@ impl<S> ProxyServerStream<S> {
         stream: S,
         method: CipherKind,
         key: &[u8],
-        user_manager: Option<Arc<RwLock<ServerUserManager>>>
+        user_manager: Option<Arc<ArcSwapAny<Arc<ServerUserManager>>>>
     ) -> ProxyServerStream<S> {
         #[cfg(feature = "aead-cipher-2022")]
         let writer_state = if method.is_aead_2022() {

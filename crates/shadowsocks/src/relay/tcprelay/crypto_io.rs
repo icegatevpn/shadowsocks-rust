@@ -7,7 +7,7 @@ use std::{
     sync::Arc,
     task::{self, Poll},
 };
-
+use arc_swap::ArcSwapAny;
 #[cfg(any(feature = "stream-cipher", feature = "aead-cipher", feature = "aead-cipher-2022"))]
 use byte_string::ByteStr;
 use bytes::Bytes;
@@ -24,6 +24,7 @@ use crate::{
     crypto::{CipherCategory, CipherKind},
 };
 use futures::executor::block_on;
+use log::warn;
 use crate::manager::protocol::ServerConfigOther;
 
 #[cfg(feature = "aead-cipher")]
@@ -386,7 +387,8 @@ impl<S> CryptoStream<S> {
         method: CipherKind,
         key: &[u8],
         identity_keys: &[Bytes],
-        user_manager: &Option<Arc<RwLock<ServerUserManager>>>
+        // user_manager: &Option<Arc<RwLock<ServerUserManager>>>
+        user_manager: &Option<Arc<ArcSwapAny<Arc<ServerUserManager>>>>
     ) -> CryptoStream<S> {
         let category = method.category();
 
@@ -439,13 +441,12 @@ impl<S> CryptoStream<S> {
 
         let mut um_clone: Option<Arc<ServerUserManager>> = None;
 
-        block_on(async {
-            if let Some(user_manager) = user_manager {
-                let uu = user_manager.read().await;
-                let uuu = &*uu;
-                um_clone = Some(Arc::from(uuu.to_owned()));
-            }
-        });
+        warn!("!! <<<<< READ ArcSwap >>>>>");
+        if let Some(user_manager) = user_manager {
+            let uu = user_manager.load();
+            let uuu = &*uu;
+            um_clone = Some(Arc::from(uuu.to_owned()));
+        }
 
         // New each packet!!
         CryptoStream {
