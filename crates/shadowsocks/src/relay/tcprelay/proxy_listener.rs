@@ -30,7 +30,7 @@ pub struct ProxyListener {
     context: SharedContext,
     // user_manager: Option<ServerUserManager>,
     // user_manager_thing: Arc<ArcSwapAny<Arc<ArcSwap<ServerUserManager>>>>
-    user_manager_thing: Arc<RwLock<ServerUserManager>>, // todo make this an ArcSwap!!! 
+    user_manager_thing: Arc<RwLock<ServerUserManager>>, // todo make this an ArcSwap!!!
     // user_manager_thing: Arc<ArcSwapAny<Arc<ArcSwap<ServerUserManager>>>>
 }
 
@@ -79,13 +79,13 @@ impl ProxyListener {
 
             loop {
                 let um = user_manager_rcv.recv().await;
-                debug!("received config from remote {:?}", um);
+                debug!("<<< received config from remote {:?}", um);
                 // um_in.store(Arc::new(um));
 
                 match um {
                     Some(userMAN) => {
                         let um = userMAN;
-                        debug!("<< write new user manager>>");
+                        debug!("<< write new user manager >>");
                         let s = *um_in.write().await = um;
                     }
                     None => {}
@@ -121,9 +121,7 @@ impl ProxyListener {
             method: svr_cfg.method(),
             key: svr_cfg.key().to_vec().into_boxed_slice(),
             context,
-            // user_manager_thing: Arc::new(ArcSwap::from(ServerUserManager::default()))
             user_manager_thing: Arc::new(RwLock::from(ServerUserManager::default()))
-            // user_manager: svr_cfg.box_user_manager(),
         }
     }
 
@@ -149,20 +147,13 @@ impl ProxyListener {
     {
         let (stream, peer_addr) = self.listener.accept().await?;
         let stream = map_fn(stream);
-        //todo now I"M here!!
-        // Create a ProxyServerStream and read the target address from it
-        // let user_manager_pointer = match self.user_manager.clone() {
-        //     Some( user_manager) => Some(&*user_manager.clone()),
-        //     None => None
-        // };
 
         let stream = ProxyServerStream::from_stream_with_user_manager(
             self.context.clone(),
             stream,
             self.method,
             &self.key,
-            None,
-            // Some(self.user_manager())
+            Some(self.user_manager_thing.clone())
         );
 
         Ok((stream, peer_addr))

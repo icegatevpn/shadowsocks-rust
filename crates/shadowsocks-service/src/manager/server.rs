@@ -610,7 +610,12 @@ impl Manager {
                         }
 
                         debug!("Setting new Users: {:?}", manager.users_iter().collect::<Vec<_>>());
-                        existing_config.set_user_manager(manager);  // this does the magic!! (I think)
+
+                        // let sender = existing_config.get_tcp_user_manager_sender();
+                        if let Some(sender) = existing_config.get_tcp_user_manager_sender() {
+                            sender.send(manager).expect("manager failed to send new user manager");
+                        }
+                        //existing_config.set_user_manager(manager);  // this does the magic!! (I think)
 
                         // This should restart the existing builtin server
                         // todo, figure out how to not restart!!

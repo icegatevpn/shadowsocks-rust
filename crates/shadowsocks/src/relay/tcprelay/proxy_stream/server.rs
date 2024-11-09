@@ -71,10 +71,7 @@ impl<S> ProxyServerStream<S> {
         let writer_state = ProxyServerStreamWriteState::Established;
 
         static EMPTY_IDENTITY: [Bytes; 0] = [];
-        // let um = match user_manager {
-        //     None => { None }
-        //     Some(mm) => {Some(Box::new(mm.clone()))}
-        // };
+
         ProxyServerStream {
             stream: CryptoStream::from_stream_with_identity(
                 &context,

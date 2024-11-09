@@ -77,11 +77,11 @@ impl ProxyClientStream<OutboundTcpStream> {
     }
 
     /// Connect to target `addr` via shadowsocks' server configured by `svr_cfg`
-    pub async fn connect_with_opts<'a, A>(
+    pub async fn connect_with_opts<A>(
         context: SharedContext,
-        svr_cfg: &'a ServerConfig,
+        svr_cfg: &ServerConfig,
         addr: A,
-        opts: &'a ConnectOpts,
+        opts: &ConnectOpts,
     ) -> io::Result<ProxyClientStream<OutboundTcpStream>>
     where
         A: Into<Address>,
@@ -115,11 +115,11 @@ where
     }
 
     /// Connect to target `addr` via shadowsocks' server configured by `svr_cfg`, maps `TcpStream` to customized stream with `map_fn`
-    pub async fn connect_with_opts_map<'a, A, F>(
+    pub async fn connect_with_opts_map<A, F>(
         context: SharedContext,
-        svr_cfg: &'a ServerConfig,
+        svr_cfg: &ServerConfig,
         addr: A,
-        opts: &'a ConnectOpts,
+        opts: &ConnectOpts,
         map_fn: F,
     ) -> io::Result<ProxyClientStream<S>>
     where

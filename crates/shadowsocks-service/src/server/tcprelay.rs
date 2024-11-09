@@ -20,7 +20,7 @@ use tokio::{
     net::TcpStream as TokioTcpStream,
     time,
 };
-use tokio::sync::mpsc::UnboundedReceiver;
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use shadowsocks::config::ServerUserManager;
 use crate::net::{utils::ignore_until_end, MonProxyStream};
 
@@ -37,19 +37,23 @@ pub struct TcpServer {
 impl TcpServer {
     pub(crate) async fn new(
         context: Arc<ServiceContext>,
-        svr_cfg: ServerConfig,
-        user_manager_rcv: Option<UnboundedReceiver<ServerUserManager>>,
+        mut svr_cfg: ServerConfig,
+        // user_manager_rcv: Option<UnboundedReceiver<ServerUserManager>>,
         accept_opts: AcceptOpts,
     ) -> io::Result<TcpServer> {
         let listener = ProxyListener::bind_with_opts(context.context(), &svr_cfg, accept_opts).await?;
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        svr_cfg.set_tcp_user_manager_sender(tx);
         Ok(TcpServer {
             context,
             svr_cfg,
             // todo, pass user manager receiver to listener !!!! **** Fing doit!!!
-            user_manager_rcv,
+            // user_manager_rcv,
+            user_manager_rcv: Some(rx),
             listener,
         })
     }
+
 
     /// Server's configuration
     pub fn server_config(&self) -> &ServerConfig {
@@ -68,21 +72,6 @@ impl TcpServer {
             self.listener.local_addr().expect("listener.local_addr"),
             self.svr_cfg.addr()
         );
-        // // todo, move this into the listener
-        // tokio::spawn(async move {
-        //     if let Some(mut receiver) = self.user_manager_rcv {
-        //         loop {
-        //             match receiver.recv().await {
-        //                 Some(m) => {
-        //                     debug!("received config from remote {:?}", m);
-        //                     self.listener.set_user_manager(Some(m));
-        //                     // self.user_manager = Some(Arc::new(m));
-        //                 }
-        //                 None => self.listener.set_user_manager(None)
-        //             }
-        //         }
-        //     }
-        // });
 
         let listening = match self.user_manager_rcv.take() {
             Some(receiver) => Some(self.listener.listen_for_users(receiver)),
@@ -90,6 +79,7 @@ impl TcpServer {
         };
 
         loop {
+
             debug!("Still listening for user manager: {:?}",listening.is_some());
             let flow_stat = self.context.flow_stat();
 
