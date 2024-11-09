@@ -9,6 +9,7 @@ use std::{
 
 use futures::future;
 use log::{error, trace};
+use tokio::sync::mpsc::UnboundedSender;
 use shadowsocks::{
     config::{ManagerAddr, ServerConfig},
     dns_resolver::DnsResolver,
@@ -17,7 +18,7 @@ use shadowsocks::{
     ManagerClient,
 };
 use tokio::time;
-
+use shadowsocks::config::ServerUserManager;
 use crate::{acl::AccessControl, config::SecurityConfig, net::FlowStat, utils::ServerHandle};
 
 use super::{context::ServiceContext, tcprelay::TcpServer, udprelay::UdpServer};
@@ -120,7 +121,7 @@ impl ServerBuilder {
     /// 1. Starts plugin (subprocess)
     /// 2. Starts TCP server (listener)
     /// 3. Starts UDP server (listener)
-    pub async fn build(mut self) -> io::Result<Server> {
+    pub async fn build(mut self) -> io::Result<(Server, Option<UnboundedSender<ServerUserManager>>)> {
         // todo you almost have a working Rwlock solution! then we can move from there!!
         let mut plugin = None;
 
@@ -131,9 +132,11 @@ impl ServerBuilder {
         }
 
         let mut tcp_server = None;
+        let mut tcp_user_manager_sender: Option<UnboundedSender<ServerUserManager>> = None;
         if self.svr_cfg.mode().enable_tcp() {
             let server = TcpServer::new(self.context.clone(), self.svr_cfg.clone(), self.accept_opts.clone()).await?;
-            tcp_server = Some(server);
+            tcp_server = Some(server.0);
+            tcp_user_manager_sender = Some(server.1);
         }
 
         let mut udp_server = None;
@@ -149,14 +152,14 @@ impl ServerBuilder {
             udp_server = Some(server);
         }
 
-        Ok(Server {
+        Ok((Server {
             context: self.context,
             svr_cfg: self.svr_cfg,
             tcp_server,
             udp_server,
             manager_addr: self.manager_addr,
             plugin,
-        })
+        }, tcp_user_manager_sender))
     }
 }
 

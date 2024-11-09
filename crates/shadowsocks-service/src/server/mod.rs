@@ -151,13 +151,13 @@ pub async fn run(config: Config) -> io::Result<()> {
 
     if servers.len() == 1 {
         let server = servers.pop().unwrap();
-        return server.run().await;
+        return server.0.run().await;
     }
 
     let mut vfut = Vec::with_capacity(servers.len());
 
     for server in servers {
-        vfut.push(ServerHandle(tokio::spawn(async move { server.run().await })));
+        vfut.push(ServerHandle(tokio::spawn(async move { server.0.run().await })));
     }
 
     let (res, ..) = future::select_all(vfut).await;

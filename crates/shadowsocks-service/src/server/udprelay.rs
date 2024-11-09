@@ -89,7 +89,7 @@ pub struct UdpServer {
     keepalive_rx: mpsc::Receiver<NatKey>,
     time_to_live: Duration,
     listener: Arc<MonProxySocket<InboundUdpSocket>>,
-    svr_cfg: ServerConfig,
+    svr_cfg:ServerConfig,
 }
 
 impl UdpServer {

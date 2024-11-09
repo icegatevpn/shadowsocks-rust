@@ -427,7 +427,7 @@ pub struct ServerConfig {
     /// Extensible Identity Headers (AEAD-2022)
     ///
     /// For server, support multi-users with EIH
-    tcp_user_manager_sender: Option<UnboundedSender<ServerUserManager>>,
+
     user_manager: Option<Arc<ServerUserManager>>,
 
     /// Plugin config
@@ -586,7 +586,6 @@ impl ServerConfig {
             method,
             enc_key,
             identity_keys: Arc::new(identity_keys),
-            tcp_user_manager_sender: None,
             user_manager: None,
             timeout: None,
             plugin: None,
@@ -598,13 +597,7 @@ impl ServerConfig {
             source: ServerSource::Default,
         }
     }
-    pub fn set_tcp_user_manager_sender(&mut self, sender: UnboundedSender<ServerUserManager>){
-        self.tcp_user_manager_sender = Some(sender);
-    }
 
-    pub fn get_tcp_user_manager_sender(&self) -> Option<UnboundedSender<ServerUserManager>> {
-        self.tcp_user_manager_sender.clone()
-    }
 
     /// Set encryption method
     pub fn set_method<P>(&mut self, method: CipherKind, password: P)

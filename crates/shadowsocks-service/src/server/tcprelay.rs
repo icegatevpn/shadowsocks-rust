@@ -36,22 +36,18 @@ pub struct TcpServer {
 
 impl TcpServer {
     pub(crate) async fn new(
-        context: Arc<ServiceContext>,
-        mut svr_cfg: ServerConfig,
-        // user_manager_rcv: Option<UnboundedReceiver<ServerUserManager>>,
+        mut context: Arc<ServiceContext>,
+        svr_cfg: ServerConfig,
         accept_opts: AcceptOpts,
-    ) -> io::Result<TcpServer> {
+    ) -> io::Result<(TcpServer, UnboundedSender<ServerUserManager>)> {
         let listener = ProxyListener::bind_with_opts(context.context(), &svr_cfg, accept_opts).await?;
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-        svr_cfg.set_tcp_user_manager_sender(tx);
-        Ok(TcpServer {
+        Ok((TcpServer {
             context,
             svr_cfg,
-            // todo, pass user manager receiver to listener !!!! **** Fing doit!!!
-            // user_manager_rcv,
             user_manager_rcv: Some(rx),
             listener,
-        })
+        }, tx))
     }
 
 

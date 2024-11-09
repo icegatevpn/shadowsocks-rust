@@ -3,7 +3,7 @@
 use std::{io, net::SocketAddr, sync::Arc};
 use arc_swap::{ArcSwap, ArcSwapAny, ArcSwapOption, Guard};
 use arc_swap::access::{Access, DynAccess};
-use log::debug;
+use log::{debug, warn};
 use once_cell::sync::Lazy;
 use tokio::sync::RwLock;
 use tokio::{
@@ -31,21 +31,9 @@ pub struct ProxyListener {
     user_manager_thing: Arc<RwLock<ServerUserManager>>, // todo make this an ArcSwap!!!
 }
 
-
 static DEFAULT_ACCEPT_OPTS: Lazy<AcceptOpts> = Lazy::new(Default::default);
 
 impl ProxyListener {
-
-    // fn user_manager(self)-> Arc<ServerUserManager> {
-    //
-    //     //todo this works with no ARC
-    //     // --
-    //     let so = ServerUserManager::default();
-    //     let sso = ArcSwap::from(Arc::new(so));//Arc::new(ArcSwap::from_pointee(so));
-    //     let st = sso.load();
-    //     st.clone()
-    //
-    // }
 
     /// Create a `ProxyListener` binding to a specific address
     pub async fn bind(context: SharedContext, svr_cfg: &ServerConfig) -> io::Result<ProxyListener> {
@@ -63,7 +51,7 @@ impl ProxyListener {
               todo just use an RW Lock!! get that working first
              */
 
-
+            warn!("<< Receiving Config....");
             loop {
                 let um = user_manager_rcv.recv().await;
                 debug!("<<< received config from remote {:?}", um);
@@ -78,6 +66,7 @@ impl ProxyListener {
                     None => {}
                 }
             }
+            warn!("<< Done Receivinging Config");
         })
     }
 
