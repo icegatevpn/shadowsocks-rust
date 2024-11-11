@@ -61,7 +61,7 @@ use aes::{
 use byte_string::ByteStr;
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use futures::ready;
-use log::{debug, error, trace};
+use log::{debug, error, info, trace, warn};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::task::JoinHandle;
 use super::{crypto_io::StreamType, proxy_stream::protocol::v2::SERVER_STREAM_TIMESTAMP_MAX_DIFF};
@@ -208,6 +208,13 @@ impl DecryptedReader {
     where
         S: AsyncRead + Unpin + ?Sized,
     {
+        if let Some(um) = user_manager {
+            let num = um.users.len();
+            info!("<< init poll_read_decrypted!! {:?}, {:?}.", user_manager.is_some(), num);
+        } else {
+            warn!("no user manager!!");
+        }
+
         loop {
             match self.state {
                 DecryptReadState::ReadHeader { ref key } => {
@@ -340,9 +347,11 @@ impl DecryptedReader {
                     // match user_manager.clone_user_by_hash(user_hash) {
 
                     None => {
+                        info!("User Not Found :( ");
                         return Err(ProtocolError::InvalidClientUser(Bytes::copy_from_slice(user_hash))).into();
                     }
                     Some(user) => {
+                        info!("User Found!!");
                         trace!("{:?} chosen by EIH", user);
                         self.user_key = Some(Bytes::copy_from_slice(user.key()));
                         TcpCipher::new(self.method, user.key(), salt)

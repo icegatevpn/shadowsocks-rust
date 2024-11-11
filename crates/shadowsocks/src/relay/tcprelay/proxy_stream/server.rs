@@ -9,6 +9,7 @@ use std::{
 use arc_swap::ArcSwapAny;
 use bytes::Bytes;
 use futures::ready;
+use log::debug;
 use pin_project::pin_project;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::sync::mpsc::UnboundedReceiver;
@@ -71,7 +72,7 @@ impl<S> ProxyServerStream<S> {
         let writer_state = ProxyServerStreamWriteState::Established;
 
         static EMPTY_IDENTITY: [Bytes; 0] = [];
-
+        debug!("+++++++++++++++++++++");
         ProxyServerStream {
             stream: CryptoStream::from_stream_with_identity(
                 &context,

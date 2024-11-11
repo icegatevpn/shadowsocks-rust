@@ -28,7 +28,8 @@ use shadowsocks::{
     ServerConfig,
 };
 use tokio::{runtime::Handle, sync::mpsc, task::JoinHandle, time};
-
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
+use shadowsocks::config::ServerUserManager;
 use crate::net::{
     packet_window::PacketWindowFilter, utils::to_ipv4_mapped, MonProxySocket, UDP_ASSOCIATION_KEEP_ALIVE_CHANNEL_SIZE,
     UDP_ASSOCIATION_SEND_CHANNEL_SIZE,
@@ -90,6 +91,7 @@ pub struct UdpServer {
     time_to_live: Duration,
     listener: Arc<MonProxySocket<InboundUdpSocket>>,
     svr_cfg:ServerConfig,
+    user_manager_rcv: Option<UnboundedReceiver<ServerUserManager>>,
 }
 
 impl UdpServer {
@@ -99,7 +101,7 @@ impl UdpServer {
         time_to_live: Option<Duration>,
         capacity: Option<usize>,
         accept_opts: AcceptOpts,
-    ) -> io::Result<UdpServer> {
+    ) -> io::Result<(UdpServer, UnboundedSender<ServerUserManager>)> {
         let time_to_live = time_to_live.unwrap_or(crate::DEFAULT_UDP_EXPIRY_DURATION);
 
         fn create_assoc_map<K, V>(time_to_live: Duration, capacity: Option<usize>) -> LruCache<K, V>
@@ -128,7 +130,9 @@ impl UdpServer {
         let socket = MonProxySocket::from_socket(socket, context.flow_stat());
         let listener = Arc::new(socket);
 
-        Ok(UdpServer {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+
+        Ok((UdpServer {
             context,
             assoc_map,
             keepalive_tx,
@@ -136,7 +140,8 @@ impl UdpServer {
             time_to_live,
             listener,
             svr_cfg,
-        })
+            user_manager_rcv: Some(rx)
+        }, tx))
     }
 
     /// Server's configuration
@@ -231,7 +236,15 @@ impl UdpServer {
         let mut buffer = [0u8; MAXIMUM_UDP_PAYLOAD_SIZE];
         // Make a clone to self.listener to avoid borrowing self
         let listener = self.listener.clone();
+
+//todo make this work
+        let listening = match self.user_manager_rcv.take() {
+            Some(receiver) => Some(self.listener.listen_for_users(receiver)),
+            None => None
+        };
+
         loop {
+            debug!("Still listening for user manager on UDPRelay: {:?}",listening.is_some());
             tokio::select! {
                 _ = cleanup_timer.tick() => {
                     // cleanup expired associations. iter() will remove expired elements

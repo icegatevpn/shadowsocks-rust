@@ -360,7 +360,7 @@ fn decrypt_message(
 
                     match user_manager.clone_user_by_hash(eih) {
                         None => {
-                            error!("user with identity {:?} not found", ByteStr::new(eih));
+                            error!("user with identity {:?} not found in {:?}", ByteStr::new(eih), user_manager);
                             return Err(ProtocolError::InvalidClientUser(Bytes::copy_from_slice(eih)));
                         }
                         Some(user) => {

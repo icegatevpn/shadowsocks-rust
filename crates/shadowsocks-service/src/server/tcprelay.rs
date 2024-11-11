@@ -76,7 +76,7 @@ impl TcpServer {
 
         loop {
 
-            debug!("Still listening for user manager: {:?}",listening.is_some());
+            debug!("Still listening for user manager on TCPRelay: {:?}",listening.is_some());
             let flow_stat = self.context.flow_stat();
 
             let (local_stream, peer_addr) = match self
@@ -167,7 +167,7 @@ impl TcpServerClient {
                 // https://github.com/shadowsocks/shadowsocks-rust/issues/292
                 //
                 // Keep connection open. Except AEAD-2022
-                warn!("tcp handshake failed. peer: {}, {}", self.peer_addr, err);
+                error!("tcp handshake failed. peer: {}, {}", self.peer_addr, err);
 
                 #[cfg(feature = "aead-cipher-2022")]
                 if self.method.is_aead_2022() {

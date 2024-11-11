@@ -42,7 +42,7 @@ impl ProxyListener {
         ProxyListener::bind_with_opts(context, svr_cfg, DEFAULT_ACCEPT_OPTS.clone()).await
     }
 
-    pub fn listen_for_users(&mut self, mut user_manager_rcv: UnboundedReceiver<ServerUserManager>)
+    pub fn listen_for_users(&self, mut user_manager_rcv: UnboundedReceiver<ServerUserManager>)
                             -> JoinHandle<()> {
 
         let um_in = Arc::clone(&self.user_manager_fancy);
@@ -63,7 +63,7 @@ impl ProxyListener {
                     Some(userMAN) => {
 
                         let um = userMAN;
-                        debug!("<< swap new user manager >>");
+                        debug!("<< STORE new user manager >> {:?}",um);
                         // let s = *um_in.write().await = um;
                         um_in.store(Arc::new(um));
                     }
@@ -118,7 +118,7 @@ impl ProxyListener {
     {
         let (stream, peer_addr) = self.listener.accept().await?;
         let stream = map_fn(stream);
-
+        debug!("++++++++++++++++++ 00000000");
         let stream = ProxyServerStream::from_stream_with_user_manager(
             self.context.clone(),
             stream,

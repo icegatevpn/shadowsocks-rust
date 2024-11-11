@@ -24,7 +24,7 @@ use crate::{
     crypto::{CipherCategory, CipherKind},
 };
 use futures::executor::block_on;
-use log::warn;
+use log::{debug, info, warn};
 use crate::manager::protocol::ServerConfigOther;
 
 #[cfg(feature = "aead-cipher")]
@@ -119,6 +119,13 @@ impl DecryptedReader {
             }
             #[cfg(feature = "aead-cipher-2022")]
             CipherCategory::Aead2022 => {
+                info!("cipher 2022 detected. Using AEAD cipher instead. <> <> <> ");
+                if let Some(um) = user_manager.clone() {
+                    let num = um.users.len();
+                    info!("---------- init poll_read_decrypted!! {:?}, {:?}.", user_manager.is_some(), num);
+                } else {
+                    warn!(" ---- no user manager!!  -----");
+                }
                 DecryptedReader::Aead2022(Aead2022DecryptedReader::with_user_manager(
                     stream_ty,
                     method,
@@ -155,6 +162,7 @@ impl DecryptedReader {
             }
             #[cfg(feature = "aead-cipher-2022")]
             DecryptedReader::Aead2022(ref mut reader, ref manager) => {
+                debug!("******************  **  **  **  **");
                 reader.poll_read_decrypted(cx, context, stream, buf, manager).map_err(Into::into)
 
             }
@@ -442,10 +450,21 @@ impl<S> CryptoStream<S> {
         let mut um_clone: Option<Arc<ServerUserManager>> = None;
 
         warn!("!! <<<<< READ ArcSwap >>>>>");
-        if let Some(user_manager) = user_manager {
-            let uu = user_manager.load();
+
+        if let Some(um) = user_manager.clone() {
+            let uu = um.load();
             let uuu = &*uu;
-            um_clone = Some(Arc::from(uuu.to_owned()));
+            let num = uuu.users.len();
+            info!(" ****** {:?}, {:?}.", user_manager.is_some(), num);
+        } else {
+            warn!(" **** no user manager!! **** ");
+        }
+
+        if let Some(user_manager) = user_manager {
+            // FIX THIS!!!! todo the magic happpens here, thiss hould be NEW!!!
+
+            um_clone = Some(Arc::from((&*user_manager.load()).to_owned()));
+            debug!(".............{:?}", um_clone);
         }
 
         // New each packet!!

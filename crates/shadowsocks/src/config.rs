@@ -3,6 +3,7 @@
 #[cfg(unix)]
 use std::path::PathBuf;
 use std::{collections::HashMap, error, fmt::{self, Debug, Display}, io, net::SocketAddr, str::{self, FromStr}, sync::Arc, time::Duration};
+use std::fmt::Formatter;
 use crate::manager::protocol::ServerConfigOther;
 
 use std::sync::Mutex;
@@ -329,8 +330,9 @@ pub enum ServerUserError {
 #[derive(Clone, Debug)]
 pub struct ServerUserManager {
     name: String,
-    users: HashMap<Bytes, Arc<ServerUser>>,
+    pub users: HashMap<Bytes, Arc<ServerUser>>,
 }
+
 
 impl ServerUserManager {
     /// Create a new manager

@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::{collections::HashMap, io, net::SocketAddr, sync::Arc, time::Duration};
 use std::ops::Deref;
 use futures::future::err;
-
+use futures::SinkExt;
 use log::{error, info, trace, warn, debug};
 use shadowsocks::{
     config::{Mode, ServerConfig, ServerType, ServerUser, ServerUserManager},
@@ -46,7 +46,8 @@ enum ServerInstanceMode {
 struct ServerInstance {
     mode: ServerInstanceMode,
     svr_cfg: ServerConfig,
-    tcp_user_manager_sender: Option<UnboundedSender<ServerUserManager>>
+    tcp_user_manager_sender: Option<UnboundedSender<ServerUserManager>>,
+    udp_user_manager_sender: Option<UnboundedSender<ServerUserManager>>
 }
 
 impl Drop for ServerInstance {
@@ -66,6 +67,14 @@ impl ServerInstance {
             #[cfg(unix)]
             ServerInstanceMode::Standalone { flow_stat } => flow_stat,
         }
+    }
+
+    fn update_user_manager(&mut self, manager:&ServerUserManager) {
+        debug!("UPDATE USER MANAGER !!!!!!");
+        self.svr_cfg.set_user_manager(manager.clone());
+        self.udp_user_manager_sender.clone().unwrap().send(manager.clone()).unwrap();
+        self.tcp_user_manager_sender.clone().unwrap().send(manager.clone()).unwrap();
+        debug!("DID IT !!!!!!");
     }
 }
 
@@ -355,14 +364,27 @@ impl Manager {
             server.0.run().await
         });
 
-        let user_sender = server.1;
+        // Send current config to TCP and UDP servers!
+        //todo init config user_manager DAMMIT
+
+        let (tcp_user_sender, udp_user_sender) = server.1;
+        if let Some(um) = svr_cfg.user_manager() {
+            if let Some(ref sender) = tcp_user_sender {
+                sender.send(um.to_owned()).unwrap();
+            }
+            if let Some(ref sender) = udp_user_sender {
+                sender.send(um.to_owned()).unwrap();
+            }
+        }
+
 
         servers.insert(
             server_port,
             ServerInstance {
                 mode: ServerInstanceMode::Builtin { flow_stat, abortable },
                 svr_cfg,
-                tcp_user_manager_sender: user_sender,
+                tcp_user_manager_sender: tcp_user_sender,
+                udp_user_manager_sender: udp_user_sender,
             }
         );
     }
@@ -517,7 +539,8 @@ impl Manager {
             ServerInstance {
                 mode: ServerInstanceMode::Standalone { flow_stat: 0 },
                 svr_cfg,
-                tcp_user_manager_sender: None
+                tcp_user_manager_sender: None,
+                udp_user_manager_sender: None,
             },
         );
     }
@@ -537,6 +560,18 @@ impl Manager {
         }
         found
     }
+    async fn get_udp_user_manager_sender(&self, port:u16)-> Option<UnboundedSender<ServerUserManager>> {
+        let mut found :Option<UnboundedSender<ServerUserManager>> = None;
+        let servers = self.servers.lock().await;
+        for ss in servers.iter() {
+            let same = ss.1.svr_cfg.addr().port() == port;
+            if same {
+                found =  ss.1.udp_user_manager_sender.clone();
+            }
+        }
+        found
+    }
+
     async fn get_config(&self, port: u16) -> Option<ServerConfig> {
         let mut found :Option<ServerConfig> = None;
         let servers = self.servers.lock().await;
@@ -597,22 +632,19 @@ impl Manager {
                             }
                             Some(exManager) => {
                                 exManager.users_iter().for_each(|u| {
+                                    debug!("EXISTING USER: {:?}", u);
                                     manager.add_user(u.clone());
                                 });
                             }
                         }
 
-                        debug!("Setting new Users: {:?}", manager.users_iter().collect::<Vec<_>>());
-                        if let Some(sender) = self.get_tcp_user_manager_sender(port).await {
-                            warn!("Send Config!!! <<<<<<<<<<<<<");
-                            sender.send(manager).expect("manager failed to send new user manager");
-                        } else {
-                            warn!("no user manager sender!!")
+                        let mut servers = self.servers.lock().await;
+                        for ss in servers.iter_mut() { //.iter() {
+                            let same = ss.1.svr_cfg.addr().port() == port;
+                            if same {
+                                ss.1.update_user_manager(&manager);
+                            }
                         }
-
-                        // This should restart the existing builtin server
-                        // todo, figure out how to not restart!!
-                        // self.add_server(existing_config).await;
 
                     },
                     None => {
@@ -862,7 +894,8 @@ impl Manager {
                             vac.insert(ServerInstance {
                                 mode: ServerInstanceMode::Standalone { flow_stat: *flow },
                                 svr_cfg,
-                                tcp_user_manager_sender: None
+                                tcp_user_manager_sender: None,
+                                udp_user_manager_sender: None,
                             });
                         }
                     }

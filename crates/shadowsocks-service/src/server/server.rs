@@ -121,7 +121,9 @@ impl ServerBuilder {
     /// 1. Starts plugin (subprocess)
     /// 2. Starts TCP server (listener)
     /// 3. Starts UDP server (listener)
-    pub async fn build(mut self) -> io::Result<(Server, Option<UnboundedSender<ServerUserManager>>)> {
+    /// returns tuple Option<TcpUserManagerSender>, Option<UdpUserManagerSender>
+    pub async fn build(mut self) ->
+                                 io::Result<(Server, (Option<UnboundedSender<ServerUserManager>>, Option<UnboundedSender<ServerUserManager>>))> {
         // todo you almost have a working Rwlock solution! then we can move from there!!
         let mut plugin = None;
 
@@ -140,6 +142,7 @@ impl ServerBuilder {
         }
 
         let mut udp_server = None;
+        let mut udp_user_manager_sender: Option<UnboundedSender<ServerUserManager>> = None;
         if self.svr_cfg.mode().enable_udp() {
             let server = UdpServer::new(
                 self.context.clone(),
@@ -149,7 +152,8 @@ impl ServerBuilder {
                 self.accept_opts.clone(),
             )
             .await?;
-            udp_server = Some(server);
+            udp_server = Some(server.0);
+            udp_user_manager_sender =  Some(server.1);
         }
 
         Ok((Server {
@@ -159,7 +163,7 @@ impl ServerBuilder {
             udp_server,
             manager_addr: self.manager_addr,
             plugin,
-        }, tcp_user_manager_sender))
+        }, (tcp_user_manager_sender, udp_user_manager_sender)))
     }
 }
 
