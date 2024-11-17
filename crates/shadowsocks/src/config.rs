@@ -255,6 +255,7 @@ impl Debug for ServerUser {
             .field("name", &self.name)
             .field("key", &USER_KEY_BASE64_ENGINE.encode(&self.key))
             .field("identity_hash", &ByteStr::new(&self.identity_hash))
+            // .field("identity_hash", &USER_KEY_BASE64_ENGINE.encode(&self.identity_hash))
             .finish()
     }
 }
@@ -277,6 +278,11 @@ impl ServerUser {
             key,
             identity_hash,
         }
+    }
+
+    pub fn key_to_identity(key: &Bytes) -> Bytes {
+        let hash = blake3::hash(&key);
+        Bytes::from(hash.as_bytes()[0..16].to_owned())
     }
 
     /// Create a user from encoded key
@@ -329,18 +335,17 @@ pub enum ServerUserError {
 /// Server multi-users manager
 #[derive(Clone, Debug)]
 pub struct ServerUserManager {
-    name: String,
     pub users: HashMap<Bytes, Arc<ServerUser>>,
 }
 
-
 impl ServerUserManager {
     /// Create a new manager
-    pub fn new(name: &str) -> ServerUserManager {
-        ServerUserManager { name: name.into(), users: HashMap::new() }
+    pub fn new() -> ServerUserManager {
+        ServerUserManager { users: HashMap::new() }
     }
+    //  todo copy this
     pub fn from_server_config_other(server_config: ServerConfigOther) -> io::Result<ServerUserManager> {
-        let mut user_manager = ServerUserManager::new("WithUsers!");
+        let mut user_manager = ServerUserManager::new();
         if let Some(ref users) = server_config.users {
             for user in users.iter() {
                 let user = match ServerUser::with_encoded_key(&user.name, &user.password) {
@@ -365,14 +370,22 @@ impl ServerUserManager {
         Ok(user_manager)
     }
     /// Add a new user
-    pub fn add_user(&mut self, user: ServerUser) {
+    pub fn add_user(&mut self, user: ServerUser)-> Option<Arc<ServerUser>> {
         debug!("<< add user: {:?} = {:?}", user.name, user.clone_identity_hash());
-        self.users.insert(user.clone_identity_hash(), Arc::new(user));
+        self.users.insert(user.clone_identity_hash(), Arc::new(user))
+    }
+    // &USER_KEY_BASE64_ENGINE.encode(&user.1.key());
+    pub fn remove_user(&mut self, user_identity_hash: &Bytes)-> Option<Arc<ServerUser>> {
+        debug!("<< remove user: {:?}",user_identity_hash );
+        debug!("<<<<<<<< FROM : {:?}",self.users );
+        let uu = self.users.remove(user_identity_hash);
+        debug!("<< {:?} after ({:?})",uu, self.users.len());
+        uu
     }
 
     /// Get user by hash key
     pub fn get_user_by_hash(&self, user_hash: &[u8]) -> Option<&ServerUser> {
-        debug!("<< get user by hash:{:?} {:?} = {:?}", self.name, user_hash, self.users);
+        debug!("<< get user by hash:{:?} = {:?}",user_hash, self.users);
         self.users.get(user_hash).map(AsRef::as_ref)
     }
 
@@ -394,7 +407,7 @@ impl ServerUserManager {
 
 impl Default for ServerUserManager {
     fn default() -> ServerUserManager {
-        ServerUserManager::new("default".into())
+        ServerUserManager::new()
     }
 }
 
@@ -677,6 +690,18 @@ impl ServerConfig {
     /// Clone user manager (Server)
     pub fn clone_user_manager(&self) -> Option<Arc<ServerUserManager>> {
         self.user_manager.clone()
+    }
+
+    pub fn copy_user_manager(&self) -> ServerUserManager {
+        // todo to this
+        let mut user_manager = ServerUserManager::new();
+        if let Some(um) = self.user_manager.as_ref() {
+            // um.users.iter().for_each(|(key, user)| {
+            um.users_iter().for_each(|user| {
+                user_manager.add_user(user.clone());
+            })
+        };
+        user_manager
     }
 
     /// Get method

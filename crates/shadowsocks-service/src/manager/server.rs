@@ -4,6 +4,8 @@
 use std::path::PathBuf;
 use std::{collections::HashMap, io, net::SocketAddr, sync::Arc, time::Duration};
 use std::ops::Deref;
+use base64::Engine;
+use bytes::Bytes;
 use futures::future::err;
 use futures::SinkExt;
 use log::{error, info, trace, warn, debug};
@@ -25,7 +27,7 @@ use shadowsocks::{
 };
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio::{sync::Mutex, task::JoinHandle, time};
-use shadowsocks::manager::protocol::{AURequest, AUResponse, ServerConfigOther};
+use shadowsocks::manager::protocol::{AddUserRequest, AddUserResponse, RemoveUserRequest, RemoveUserResponse, ServerConfigOther};
 use crate::{
     acl::AccessControl,
     config::{ManagerConfig, ManagerServerHost, ManagerServerMode, SecurityConfig},
@@ -42,6 +44,13 @@ enum ServerInstanceMode {
     #[cfg(unix)]
     Standalone { flow_stat: u64 },
 }
+
+const USER_KEY_BASE64_ENGINE: base64::engine::GeneralPurpose = base64::engine::GeneralPurpose::new(
+    &base64::alphabet::STANDARD,
+    base64::engine::GeneralPurposeConfig::new()
+        .with_encode_padding(true)
+        .with_decode_padding_mode(base64::engine::DecodePaddingMode::Indifferent),
+);
 
 struct ServerInstance {
     mode: ServerInstanceMode,
@@ -256,6 +265,15 @@ impl Manager {
                     }
                 }
                 ManagerRequest::Stat(ref stat) => self.handle_stat(stat).await,
+
+                ManagerRequest::RemoveUser(ref req) => match self.handle_remove_user(req).await {
+                    Ok(r) => {
+                        debug!("removed user: {:?}", r);
+                    }
+                    Err(e) => {
+                        warn!("removed user failed: {}", e);
+                    }
+                }
             }
         }
     }
@@ -588,7 +606,7 @@ impl Manager {
 
     // fn user_manager_with_users(config: &ServerConfigOther) -> io::Result<ServerUserManager> {
     pub fn user_manager_with_users(config: &ServerConfigOther) -> io::Result<ServerUserManager> {
-        let mut user_manager = ServerUserManager::new("WithUsers!");
+        let mut user_manager = ServerUserManager::new();
         if let Some(ref users) = config.users {
             for user in users.iter() {
                 let user = match ServerUser::with_encoded_key(&user.name, &user.password) {
@@ -613,49 +631,70 @@ impl Manager {
         Ok(user_manager)
     }
 
-    async fn handle_add_user(&self, req: &AURequest) -> io::Result<AUResponse> {
-        // todo, do work here !!!!
+    async fn handle_remove_user(&self, remove_request: &RemoveUserRequest) ->  io::Result<RemoveUserResponse> {
+        let user_hash: String = remove_request.key.clone();
+        let key_in = USER_KEY_BASE64_ENGINE.decode(user_hash).unwrap();
+        let mut servers = self.servers.lock().await;
+
+        let matching_server = servers.iter_mut().find(|(_, server_instance)| {
+            server_instance
+                .svr_cfg
+                .user_manager()
+                .map(|user_manager| {
+                    let users_map: &HashMap<Bytes, Arc<ServerUser>> = &user_manager.users;
+                    users_map
+                        .values()
+                        .any(|user| user.key() == key_in)
+                })
+                .unwrap_or(false)
+        });
+        if let Some((server_id, server_instance)) = matching_server {
+            warn!("Found user in server: {:?}", server_id);
+            let bytes: Bytes = key_in.into();
+            let identity = ServerUser::key_to_identity(&bytes);
+            let mut user_manager = server_instance.svr_cfg.copy_user_manager();
+            let removed = user_manager.remove_user(&identity);
+            info!(" <<<<<<  Removed user: {:?} >>>>>>>", removed);
+            server_instance.update_user_manager(&user_manager);
+
+            Ok(RemoveUserResponse("User found and processed".to_string()))
+        } else {
+            Ok(RemoveUserResponse("User not found".to_string()))
+        }
+    }
+
+    async fn handle_add_user(&self, req: &AddUserRequest) -> io::Result<AddUserResponse> {
         let new_config = &req.config;
         let port  = new_config.server_port;
-        let existing_config_op = self.get_config(port).await;
-        warn!(" <<<<<<<<<<<<< 1 >>>>>>>>>>>>>>");
-        match Self::user_manager_with_users(new_config) {
-
-            Ok(mut manager) => {
-                warn!(" <<<<<<<<<<<<< 2 >>>>>>>>>>>>>>");
-                match existing_config_op {
-                    Some(mut existing_config) => {
-                        warn!(" <<<<<<<<<<<<< 3 >>>>>>>>>>>>>>");
-                        match existing_config.user_manager() {
-                            None => {
-                                warn!("no user manager")
-                            }
-                            Some(exManager) => {
-                                exManager.users_iter().for_each(|u| {
-                                    debug!("EXISTING USER: {:?}", u);
-                                    manager.add_user(u.clone());
-                                });
-                            }
-                        }
-
-                        let mut servers = self.servers.lock().await;
-                        for ss in servers.iter_mut() { //.iter() {
-                            let same = ss.1.svr_cfg.addr().port() == port;
-                            if same {
-                                ss.1.update_user_manager(&manager);
-                            }
-                        }
-
-                    },
-                    None => {
-                        warn!("Server not found");
+        if let Some(mut existing_config) =self.get_config(port).await {
+            // if let Some(new_manager) = Self::user_manager_with_users(new_config)? {
+            match Self::user_manager_with_users(new_config) {
+                Ok(mut new_manager) => {
+                    if let Some(old_manager) = existing_config.user_manager() {
+                        info!("<< Existing manager: {:?}", old_manager);
+                        old_manager.users_iter().for_each(|u| {
+                            new_manager.add_user(u.clone());
+                        });
+                        debug!("DONE SEARCHING ....");
                     }
+                    let mut servers = self.servers.lock().await;
+                    let mut matching_server = servers.iter_mut().find(|(_, srv)|{
+                        srv.svr_cfg.addr().port() == port
+                    });
+                    if let Some((_,matching_server)) = matching_server {
+                        warn!("<<<< MATCH SERVER");
+                        matching_server.update_user_manager(&new_manager);
+                    }
+
+                    // update existing config!!
+                    existing_config.set_user_manager(new_manager);
+                },
+                Err(err) => {
+                    error!("Failed to Build new ServerUserManager: {:?}", err);
                 }
             }
-            Err(e) => {error!("Error adding user: {}", e);}
         }
-
-        Ok(AUResponse("sup".into()))
+        Ok(AddUserResponse("sup".into()))
     }
 
     async fn handle_add(&self, req: &AddRequest) -> io::Result<AddResponse> {
@@ -903,4 +942,6 @@ impl Manager {
             }
         }
     }
+
+
 }

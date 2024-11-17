@@ -6,10 +6,10 @@ use std::{
     str,
     string::ToString,
 };
-use log::{debug, error};
-use serde::{Deserialize, Serialize};
+use log::{debug, error, info};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use thiserror::Error;
-use crate::manager::protocol::ManagerRequest::AddUser;
+use bytes::{BufMut, Bytes};
 
 /// Abstract Manager Protocol
 pub trait ManagerProtocol: Sized {
@@ -45,16 +45,66 @@ pub struct ServerConfigOther {
     pub users: Option<Vec<ServerUserConfig>>,
 }
 
+//// 'remove user'
+#[derive(Debug, Clone)]
+pub struct RemoveUserRequest {
+    pub key: String
+}
+
+impl ManagerProtocol for RemoveUserRequest {
+    fn from_bytes(buffer: &[u8]) -> Result<Self, Error> {
+
+        let mut nsplit = buffer.splitn(2, |b| *b == b':');
+        let cmd = nsplit.next().expect("first element shouldn't be None");
+        let cmd = str::from_utf8(cmd)?.trim();
+        if cmd != "removeu" {
+            return Err(Error::UnrecognizedCommand(cmd.to_owned()));
+        }
+
+        match nsplit.next() {
+            None => Err(Error::MissingParameter),
+            Some(param) => {
+                let req = //Bytes::copy_from_slice(param);
+                debug!("<< Remove User Hash: {:?} >>>", param);
+                Ok(RemoveUserRequest {key:String::from_utf8(param.to_vec()).unwrap()})
+            }
+        }
+    }
+
+    fn to_bytes(&self) -> Result<Vec<u8>, Error> {
+        debug!("<< DO SONETHING ELSE");
+        let mut buf = b"removeu: ".to_vec();
+        buf.put_slice(self.key.as_bytes());
+        buf.push(b'\n');
+        Ok(buf)
+    }
+}
+
+
+#[derive(Debug, Clone)]
+pub struct RemoveUserResponse(pub String);
+
+impl ManagerProtocol for RemoveUserResponse {
+    fn from_bytes(buf: &[u8]) -> Result<Self, Error> {
+        Ok(RemoveUserResponse(str::from_utf8(buf)?.trim().to_owned()))
+    }
+
+    fn to_bytes(&self) -> Result<Vec<u8>, Error> {
+        let mut v = b"removeUser".to_vec();//self.0.as_bytes().to_owned();
+        v.push(b'\n');
+        Ok(v)
+    }
+}
+
 /// `add User` request
 #[derive(Debug, Clone)]
-pub struct AURequest {
+pub struct AddUserRequest {
     pub config: ServerConfigOther
 }
 // pub type AURequest = ServerConfig;
 
-impl ManagerProtocol for AURequest {
+impl ManagerProtocol for AddUserRequest {
     fn from_bytes(buf: &[u8]) -> Result<Self, Error> {
-        debug!("<< from_bytes: {:?}", buf);
         let mut nsplit = buf.splitn(2, |b| *b == b':');
 
         let cmd = nsplit.next().expect("first element shouldn't be None");
@@ -66,9 +116,8 @@ impl ManagerProtocol for AURequest {
         match nsplit.next() {
             None => Err(Error::MissingParameter),
             Some(param) => {
-                debug!("<< Itsa mee: {:?}", param);
                 let req = serde_json::from_slice(param)?;
-                Ok(AURequest{config:req})
+                Ok(AddUserRequest {config:req})
             }
         }
     }
@@ -83,11 +132,11 @@ impl ManagerProtocol for AURequest {
 
 /// `add User` response
 #[derive(Debug, Clone)]
-pub struct AUResponse(pub String);
+pub struct AddUserResponse(pub String);
 
-impl ManagerProtocol for AUResponse {
+impl ManagerProtocol for AddUserResponse {
     fn from_bytes(buf: &[u8]) -> Result<Self, Error> {
-        Ok(AUResponse(str::from_utf8(buf)?.trim().to_owned()))
+        Ok(AddUserResponse(str::from_utf8(buf)?.trim().to_owned()))
     }
 
     fn to_bytes(&self) -> Result<Vec<u8>, Error> {
@@ -342,7 +391,8 @@ pub enum ManagerRequest {
     List(ListRequest),
     Ping(PingRequest),
     Stat(StatRequest),
-    AddUser(AURequest),
+    AddUser(AddUserRequest),
+    RemoveUser(RemoveUserRequest),
 }
 
 impl ManagerRequest {
@@ -355,22 +405,12 @@ impl ManagerRequest {
             ManagerRequest::Ping(..) => "ping",
             ManagerRequest::Stat(..) => "stat",
             ManagerRequest::AddUser(..) => "addu",
+            ManagerRequest::RemoveUser(..) => "removeu",
         }
     }
 }
 
 impl ManagerProtocol for ManagerRequest {
-    fn to_bytes(&self) -> Result<Vec<u8>, Error> {
-        match *self {
-            ManagerRequest::Add(ref req) => req.to_bytes(),
-            ManagerRequest::Remove(ref req) => req.to_bytes(),
-            ManagerRequest::List(ref req) => req.to_bytes(),
-            ManagerRequest::Ping(ref req) => req.to_bytes(),
-            ManagerRequest::Stat(ref req) => req.to_bytes(),
-            ManagerRequest::AddUser(ref req) => req.to_bytes(),
-        }
-    }
-
     fn from_bytes(buf: &[u8]) -> Result<ManagerRequest, Error> {
         let mut nsplit = buf.splitn(2, |b| *b == b':');
 
@@ -392,9 +432,20 @@ impl ManagerProtocol for ManagerRequest {
                     debug!("<< param:: up: {:?}", String::from_utf8(param.to_vec()));
                     let req = serde_json::from_slice(param)?;
                     debug!("<< req {:?}", req);
-                    Ok(ManagerRequest::AddUser(AURequest{config:req}))
+                    Ok(ManagerRequest::AddUser(AddUserRequest {config:req}))
                 }
             },
+            "removeu" => match nsplit.next() {
+                None => Err(Error::MissingParameter),
+                Some(mut param) => {
+                    param = param.trim_ascii();
+
+                    info!("<<<< blahhh parse a thing");
+                    // let req = Bytes::copy_from_slice(param);
+                    let rr = RemoveUserRequest{key:String::from_utf8(param.to_vec()).unwrap()};
+                    Ok(ManagerRequest::RemoveUser(rr))
+                }
+            }
             "remove" => match nsplit.next() {
                 None => Err(Error::MissingParameter),
                 Some(param) => {
@@ -422,6 +473,18 @@ impl ManagerProtocol for ManagerRequest {
                 }
             },
             cmd => Err(Error::UnrecognizedCommand(cmd.to_owned())),
+        }
+    }
+
+    fn to_bytes(&self) -> Result<Vec<u8>, Error> {
+        match *self {
+            ManagerRequest::Add(ref req) => req.to_bytes(),
+            ManagerRequest::Remove(ref req) => req.to_bytes(),
+            ManagerRequest::List(ref req) => req.to_bytes(),
+            ManagerRequest::Ping(ref req) => req.to_bytes(),
+            ManagerRequest::Stat(ref req) => req.to_bytes(),
+            ManagerRequest::AddUser(ref req) => req.to_bytes(),
+            ManagerRequest::RemoveUser(ref req) => req.to_bytes(),
         }
     }
 }

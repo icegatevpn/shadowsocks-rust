@@ -2007,7 +2007,7 @@ impl Config {
             }
         }
 
-        // Ext servers
+        // Existing servers
         if let Some(servers) = config.servers {
             for svr in servers {
                 // Skip if server is disabled
@@ -2060,7 +2060,7 @@ impl Config {
 
                 // Extensible Identity Header, Users
                 if let Some(users) = svr.users {
-                    let mut user_manager = ServerUserManager::new("ServerConfig");
+                    let mut user_manager = ServerUserManager::new();
 
                     for user in users {
                         let user = match ServerUser::with_encoded_key(user.name, &user.password) {

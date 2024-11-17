@@ -25,6 +25,7 @@ use crate::{
 };
 use futures::executor::block_on;
 use log::{debug, info, warn};
+use crate::config::ServerSource::Configuration;
 use crate::manager::protocol::ServerConfigOther;
 
 #[cfg(feature = "aead-cipher")]
@@ -450,21 +451,14 @@ impl<S> CryptoStream<S> {
         let mut um_clone: Option<Arc<ServerUserManager>> = None;
 
         warn!("!! <<<<< READ ArcSwap >>>>>");
-
         if let Some(um) = user_manager.clone() {
-            let uu = um.load();
-            let uuu = &*uu;
-            let num = uuu.users.len();
-            info!(" ****** {:?}, {:?}.", user_manager.is_some(), num);
+            info!(" ****** {:?}, {:?} users", user_manager.is_some(), (&*um.load()).users.len());
         } else {
             warn!(" **** no user manager!! **** ");
         }
 
         if let Some(user_manager) = user_manager {
-            // FIX THIS!!!! todo the magic happpens here, thiss hould be NEW!!!
-
             um_clone = Some(Arc::from((&*user_manager.load()).to_owned()));
-            debug!(".............{:?}", um_clone);
         }
 
         // New each packet!!
