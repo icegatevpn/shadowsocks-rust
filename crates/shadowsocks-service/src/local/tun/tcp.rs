@@ -36,7 +36,7 @@ use crate::{
         loadbalancing::PingBalancer,
         net::AutoProxyClientStream,
         utils::{establish_tcp_tunnel, establish_tcp_tunnel_bypassed},
-    }, me_debug, net::utils::to_ipv4_mapped
+    }, net::utils::to_ipv4_mapped
 };
 
 use super::virt_device::VirtTunDevice;

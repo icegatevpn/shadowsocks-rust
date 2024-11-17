@@ -1,16 +1,13 @@
 //! A TCP listener for accepting shadowsocks' client connection
 
 use std::{io, net::SocketAddr, sync::Arc};
-use arc_swap::{ArcSwap, ArcSwapAny, ArcSwapOption, Guard};
-use arc_swap::access::{Access, DynAccess};
+use arc_swap::{ArcSwap, ArcSwapAny};
 use log::{debug, warn};
 use once_cell::sync::Lazy;
-use tokio::sync::RwLock;
 use tokio::{
     io::{AsyncRead, AsyncWrite},
     net::TcpStream,
 };
-use futures::executor::block_on;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::task::JoinHandle;
 use crate::{
@@ -44,33 +41,16 @@ impl ProxyListener {
 
     pub fn listen_for_users(&self, mut user_manager_rcv: UnboundedReceiver<ServerUserManager>)
                             -> JoinHandle<()> {
-
         let um_in = Arc::clone(&self.user_manager_fancy);
-
         tokio::spawn(async move {
-            /*
-              ********************************** todo  DO SOME MAGIC!!! ********************************
-              todo just use an RW Lock!! get that working first
-             */
-
-            warn!("<< Receiving Config....");
+            warn!("Receiving Config....");
             loop {
                 let um = user_manager_rcv.recv().await;
-                debug!("<<< received config from remote {:?}", um);
-                // um_in.store(Arc::new(um));
-
-                match um {
-                    Some(userMAN) => {
-
-                        let um = userMAN;
-                        debug!("<< STORE new user manager >> {:?}",um);
-                        // let s = *um_in.write().await = um;
-                        um_in.store(Arc::new(um));
-                    }
-                    None => {}
+                debug!("Received config from remote {:?}", um);
+                if let Some(um) = um {
+                    um_in.store(Arc::new(um));
                 }
             }
-            warn!("<< Done Receivinging Config");
         })
     }
 

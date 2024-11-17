@@ -3,20 +3,14 @@
 #[cfg(unix)]
 use std::path::PathBuf;
 use std::{collections::HashMap, error, fmt::{self, Debug, Display}, io, net::SocketAddr, str::{self, FromStr}, sync::Arc, time::Duration};
-use std::fmt::Formatter;
 use crate::manager::protocol::ServerConfigOther;
-
-use std::sync::Mutex;
-use base64::Engine as _;
+use base64::{DecodeError, Engine as _};
 use byte_string::ByteStr;
 use bytes::Bytes;
 use cfg_if::cfg_if;
 use log::{debug, error, warn};
-// use serde::de::Unexpected::Str;
 use thiserror::Error;
 use url::{self, Url};
-use tokio::sync::mpsc;
-use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
 #[cfg(any(feature = "stream-cipher", feature = "aead-cipher"))]
 use crate::crypto::v1::openssl_bytes_to_key;
@@ -255,7 +249,6 @@ impl Debug for ServerUser {
             .field("name", &self.name)
             .field("key", &USER_KEY_BASE64_ENGINE.encode(&self.key))
             .field("identity_hash", &ByteStr::new(&self.identity_hash))
-            // .field("identity_hash", &USER_KEY_BASE64_ENGINE.encode(&self.identity_hash))
             .finish()
     }
 }
@@ -270,8 +263,7 @@ impl ServerUser {
         let name = name.into();
         let key = key.into();
 
-        let hash = blake3::hash(&key);
-        let identity_hash = Bytes::from(hash.as_bytes()[0..16].to_owned());
+        let identity_hash = Self::key_to_identity(&key);
 
         ServerUser {
             name,
@@ -284,13 +276,16 @@ impl ServerUser {
         let hash = blake3::hash(&key);
         Bytes::from(hash.as_bytes()[0..16].to_owned())
     }
+    pub fn str_to_key(str: &str) -> Result<Vec<u8>, DecodeError> {
+        USER_KEY_BASE64_ENGINE.decode(str)
+    }
 
     /// Create a user from encoded key
     pub fn with_encoded_key<N>(name: N, key: &str) -> Result<ServerUser, ServerUserError>
     where
         N: Into<String>,
     {
-        let key = USER_KEY_BASE64_ENGINE.decode(key)?;
+        let key = Self::str_to_key(key)?; //USER_KEY_BASE64_ENGINE.decode(key)?;
         Ok(ServerUser::new(name, key))
     }
 
@@ -371,21 +366,15 @@ impl ServerUserManager {
     }
     /// Add a new user
     pub fn add_user(&mut self, user: ServerUser)-> Option<Arc<ServerUser>> {
-        debug!("<< add user: {:?} = {:?}", user.name, user.clone_identity_hash());
         self.users.insert(user.clone_identity_hash(), Arc::new(user))
     }
     // &USER_KEY_BASE64_ENGINE.encode(&user.1.key());
     pub fn remove_user(&mut self, user_identity_hash: &Bytes)-> Option<Arc<ServerUser>> {
-        debug!("<< remove user: {:?}",user_identity_hash );
-        debug!("<<<<<<<< FROM : {:?}",self.users );
-        let uu = self.users.remove(user_identity_hash);
-        debug!("<< {:?} after ({:?})",uu, self.users.len());
-        uu
+        self.users.remove(user_identity_hash)
     }
 
     /// Get user by hash key
     pub fn get_user_by_hash(&self, user_hash: &[u8]) -> Option<&ServerUser> {
-        debug!("<< get user by hash:{:?} = {:?}",user_hash, self.users);
         self.users.get(user_hash).map(AsRef::as_ref)
     }
 

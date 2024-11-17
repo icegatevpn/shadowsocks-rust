@@ -7,7 +7,6 @@ use std::{
     sync::Arc,
     time::Duration,
 };
-use std::thread::JoinHandle;
 use log::{debug, error, info, trace, warn};
 use shadowsocks::{
     crypto::CipherKind,
@@ -36,7 +35,7 @@ pub struct TcpServer {
 
 impl TcpServer {
     pub(crate) async fn new(
-        mut context: Arc<ServiceContext>,
+        context: Arc<ServiceContext>,
         svr_cfg: ServerConfig,
         accept_opts: AcceptOpts,
     ) -> io::Result<(TcpServer, UnboundedSender<ServerUserManager>)> {

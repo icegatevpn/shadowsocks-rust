@@ -15,18 +15,12 @@ use futures::ready;
 #[cfg(any(feature = "stream-cipher", feature = "aead-cipher", feature = "aead-cipher-2022"))]
 use log::trace;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
-use libc::{raise, read};
-use tokio::sync::mpsc::UnboundedReceiver;
-use tokio::sync::RwLock;
 use crate::{
     config::ServerUserManager,
     context::Context,
     crypto::{CipherCategory, CipherKind},
 };
-use futures::executor::block_on;
 use log::{debug, info, warn};
-use crate::config::ServerSource::Configuration;
-use crate::manager::protocol::ServerConfigOther;
 
 #[cfg(feature = "aead-cipher")]
 use super::aead::{DecryptedReader as AeadDecryptedReader, EncryptedWriter as AeadEncryptedWriter};

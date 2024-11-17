@@ -6,10 +6,10 @@ use std::{
     str,
     string::ToString,
 };
-use log::{debug, error, info};
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use log::error;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use bytes::{BufMut, Bytes};
+use bytes::BufMut;
 
 /// Abstract Manager Protocol
 pub trait ManagerProtocol: Sized {
@@ -45,15 +45,14 @@ pub struct ServerConfigOther {
     pub users: Option<Vec<ServerUserConfig>>,
 }
 
-//// 'remove user'
+/// Remove user
 #[derive(Debug, Clone)]
 pub struct RemoveUserRequest {
-    pub key: String
+    pub key: String,
 }
 
 impl ManagerProtocol for RemoveUserRequest {
     fn from_bytes(buffer: &[u8]) -> Result<Self, Error> {
-
         let mut nsplit = buffer.splitn(2, |b| *b == b':');
         let cmd = nsplit.next().expect("first element shouldn't be None");
         let cmd = str::from_utf8(cmd)?.trim();
@@ -64,15 +63,12 @@ impl ManagerProtocol for RemoveUserRequest {
         match nsplit.next() {
             None => Err(Error::MissingParameter),
             Some(param) => {
-                let req = //Bytes::copy_from_slice(param);
-                debug!("<< Remove User Hash: {:?} >>>", param);
-                Ok(RemoveUserRequest {key:String::from_utf8(param.to_vec()).unwrap()})
+                Ok(RemoveUserRequest { key: String::from_utf8(param.to_vec()).unwrap() })
             }
         }
     }
 
     fn to_bytes(&self) -> Result<Vec<u8>, Error> {
-        debug!("<< DO SONETHING ELSE");
         let mut buf = b"removeu: ".to_vec();
         buf.put_slice(self.key.as_bytes());
         buf.push(b'\n');
@@ -90,18 +86,17 @@ impl ManagerProtocol for RemoveUserResponse {
     }
 
     fn to_bytes(&self) -> Result<Vec<u8>, Error> {
-        let mut v = b"removeUser".to_vec();//self.0.as_bytes().to_owned();
+        let mut v = b"removeUser".to_vec();
         v.push(b'\n');
         Ok(v)
     }
 }
 
-/// `add User` request
+/// add User request
 #[derive(Debug, Clone)]
 pub struct AddUserRequest {
-    pub config: ServerConfigOther
+    pub config: ServerConfigOther,
 }
-// pub type AURequest = ServerConfig;
 
 impl ManagerProtocol for AddUserRequest {
     fn from_bytes(buf: &[u8]) -> Result<Self, Error> {
@@ -117,7 +112,7 @@ impl ManagerProtocol for AddUserRequest {
             None => Err(Error::MissingParameter),
             Some(param) => {
                 let req = serde_json::from_slice(param)?;
-                Ok(AddUserRequest {config:req})
+                Ok(AddUserRequest { config: req })
             }
         }
     }
@@ -130,7 +125,7 @@ impl ManagerProtocol for AddUserRequest {
     }
 }
 
-/// `add User` response
+/// add User response
 #[derive(Debug, Clone)]
 pub struct AddUserResponse(pub String);
 
@@ -140,9 +135,9 @@ impl ManagerProtocol for AddUserResponse {
     }
 
     fn to_bytes(&self) -> Result<Vec<u8>, Error> {
-        let mut v = b"addUser".to_vec();//self.0.as_bytes().to_owned();
-        v.push(b'\n');
-        Ok(v)
+        let mut vec = b"addUser".to_vec();
+        vec.push(b'\n');
+        Ok(vec)
     }
 }
 
@@ -425,25 +420,19 @@ impl ManagerProtocol for ManagerRequest {
             },
             "addu" => match nsplit.next() {
                 None => {
-                    error!("<<<< blahhh");
                     Err(Error::MissingParameter)
-                },
+                }
                 Some(param) => {
-                    debug!("<< param:: up: {:?}", String::from_utf8(param.to_vec()));
-                    let req = serde_json::from_slice(param)?;
-                    debug!("<< req {:?}", req);
-                    Ok(ManagerRequest::AddUser(AddUserRequest {config:req}))
+                    let config = serde_json::from_slice(param)?;
+                    Ok(ManagerRequest::AddUser(AddUserRequest { config }))
                 }
             },
             "removeu" => match nsplit.next() {
                 None => Err(Error::MissingParameter),
                 Some(mut param) => {
                     param = param.trim_ascii();
-
-                    info!("<<<< blahhh parse a thing");
-                    // let req = Bytes::copy_from_slice(param);
-                    let rr = RemoveUserRequest{key:String::from_utf8(param.to_vec()).unwrap()};
-                    Ok(ManagerRequest::RemoveUser(rr))
+                    let request = RemoveUserRequest { key: String::from_utf8(param.to_vec()).unwrap() };
+                    Ok(ManagerRequest::RemoveUser(request))
                 }
             }
             "remove" => match nsplit.next() {

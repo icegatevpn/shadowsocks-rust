@@ -16,7 +16,6 @@ use tokio::{
     io::{AsyncRead, AsyncWrite, ReadBuf},
     time,
 };
-use tokio::sync::mpsc::UnboundedReceiver;
 #[cfg(feature = "aead-cipher-2022")]
 use crate::relay::get_aead_2022_padding_size;
 use crate::{
@@ -29,7 +28,6 @@ use crate::{
         tcprelay::crypto_io::{CryptoRead, CryptoStream, CryptoWrite, StreamType},
     },
 };
-use crate::config::ServerUserManager;
 
 #[derive(Debug)]
 enum ProxyClientStreamWriteState {

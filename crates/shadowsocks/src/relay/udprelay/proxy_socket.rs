@@ -14,7 +14,6 @@ use std::{
 
 use byte_string::ByteStr;
 use bytes::{Bytes, BytesMut};
-use futures::future::err;
 use log::{error, info, trace, warn};
 use once_cell::sync::Lazy;
 use tokio::{io::ReadBuf, time};

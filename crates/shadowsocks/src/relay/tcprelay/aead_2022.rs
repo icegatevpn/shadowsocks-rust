@@ -52,7 +52,6 @@ use std::{
     task::{self, Poll},
     time::SystemTime,
 };
-use tokio::sync::mpsc::UnboundedReceiver;
 
 use aes::{
     cipher::{BlockDecrypt, BlockEncrypt, KeyInit},
@@ -61,17 +60,14 @@ use aes::{
 use byte_string::ByteStr;
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use futures::ready;
-use log::{debug, error, info, trace, warn};
+use log::{error, info, trace, warn};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
-use tokio::task::JoinHandle;
 use super::{crypto_io::StreamType, proxy_stream::protocol::v2::SERVER_STREAM_TIMESTAMP_MAX_DIFF};
 use crate::{
     config::{method_support_eih, ServerUserManager},
     context::Context,
     crypto::{v2::tcp::TcpCipher, CipherKind},
 };
-use crate::config::ServerUser;
-use crate::manager::protocol::ServerConfigOther;
 
 #[inline]
 fn get_now_timestamp() -> u64 {

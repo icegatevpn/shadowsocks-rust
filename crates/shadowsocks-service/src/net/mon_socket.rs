@@ -2,7 +2,6 @@
 
 use std::{io, net::SocketAddr, sync::Arc};
 use arc_swap::{ArcSwap, ArcSwapAny};
-use log::{debug, warn};
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::task::JoinHandle;
 use shadowsocks::{
@@ -26,7 +25,7 @@ impl<S> MonProxySocket<S> {
     /// Create a new socket with flow monitor
     pub fn from_socket(socket: ProxySocket<S>, flow_stat: Arc<FlowStat>) -> MonProxySocket<S> {
         let user_manager = Arc::new(ArcSwap::new(Arc::new(ServerUserManager::default())));
-        MonProxySocket { socket, flow_stat , user_manager_fancy: user_manager}
+        MonProxySocket { socket, flow_stat, user_manager_fancy: user_manager }
     }
 
     /// Get the underlying `ProxySocket<S>` immutable reference
@@ -59,21 +58,12 @@ where
                             -> JoinHandle<()> {
         let um_in = Arc::clone(&self.user_manager_fancy);
         tokio::spawn(async move {
-            warn!("<< MON Receiving Config....");
             loop {
                 let um = user_manager_rcv.recv().await;
-                debug!("<<< MON received config from remote {:?}", um);
-                match um {
-                    Some(userMAN) => {
-                        let um = userMAN;
-                        debug!("<< MON swap new user manager >>");
-                        // let s = *um_in.write().await = um;
-                        um_in.store(Arc::new(um));
-                    }
-                    None => {}
+                if let Some(um) = um {
+                    um_in.store(Arc::new(um));
                 }
             }
-            warn!("<< Done MON Receivinging Config");
         })
     }
 
@@ -148,12 +138,8 @@ where
 
         Ok((n, addr, control))
     }
-    fn user_manager(&self)->Arc<ServerUserManager> {
-        // if let Some(user_manager) = self.user_manager_fancy {
-        //     Some(Arc::from((&*user_manager.load()).to_owned()));
-        // } else {None};
-        let ff = self.user_manager_fancy.load().clone();
-        ff
+    fn user_manager(&self) -> Arc<ServerUserManager> {
+        self.user_manager_fancy.load().clone()
     }
 
     /// Receive packet from Shadowsocks' UDP server
@@ -163,8 +149,6 @@ where
     /// It is recommended to allocate a buffer to have at least 65536 bytes.
     #[inline]
     pub async fn recv_from(&self, recv_buf: &mut [u8]) -> io::Result<(usize, SocketAddr, Address)> {
-
-
         let (n, peer_addr, addr, recv_n) = self.socket.recv_from(recv_buf, Some(self.user_manager().as_ref())).await?;
         self.flow_stat.incr_rx(recv_n as u64);
 

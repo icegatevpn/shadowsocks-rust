@@ -11,6 +11,7 @@ use std::process::ExitCode;
 
 use clap::Command;
 use shadowsocks_rust::service::manager;
+
 fn main() -> ExitCode {
     let mut app = Command::new("shadowsocks")
         .version(shadowsocks_rust::VERSION)

@@ -1,8 +1,6 @@
 //! Shadowsocks Local Server Context
 
 use std::{net::SocketAddr, sync::Arc};
-use log::warn;
-use tokio::sync::mpsc::UnboundedSender;
 use shadowsocks::{
     config::ServerType,
     context::{Context, SharedContext},
@@ -10,7 +8,6 @@ use shadowsocks::{
     net::ConnectOpts,
     relay::Address,
 };
-use shadowsocks::config::ServerUserManager;
 use crate::{acl::AccessControl, config::SecurityConfig, net::FlowStat};
 
 /// Server Service Context

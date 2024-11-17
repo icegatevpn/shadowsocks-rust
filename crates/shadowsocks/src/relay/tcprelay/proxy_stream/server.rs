@@ -12,8 +12,6 @@ use futures::ready;
 use log::debug;
 use pin_project::pin_project;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
-use tokio::sync::mpsc::UnboundedReceiver;
-use tokio::sync::RwLock;
 use crate::{
     config::ServerUserManager,
     context::SharedContext,
