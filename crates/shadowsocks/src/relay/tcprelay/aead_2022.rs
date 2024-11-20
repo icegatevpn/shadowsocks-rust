@@ -139,10 +139,9 @@ pub struct DecryptedReader {
 }
 
 impl DecryptedReader {
-    // pub fn new(stream_ty: StreamType, method: CipherKind, key: &[u8]) -> DecryptedReader {
-    //     // todo, pass in and initialize receiver here!!
-    //     DecryptedReader::with_user_manager(stream_ty, method, key, None, None)
-    // }
+    pub fn new(stream_ty: StreamType, method: CipherKind, key: &[u8]) -> DecryptedReader {
+        DecryptedReader::with_user_manager(stream_ty, method, key)
+    }
 
     pub fn with_user_manager(
         stream_ty: StreamType,
@@ -161,7 +160,6 @@ impl DecryptedReader {
                 salt: None,
                 request_salt: None,
                 data_chunk_count: 0,
-                // user_manager,
                 user_key: None,
                 has_handshaked: false,
             }
@@ -177,7 +175,6 @@ impl DecryptedReader {
                 salt: None,
                 request_salt: None,
                 data_chunk_count: 0,
-                // user_manager,
                 user_key: None,
                 has_handshaked: false,
             }
@@ -204,13 +201,6 @@ impl DecryptedReader {
     where
         S: AsyncRead + Unpin + ?Sized,
     {
-        if let Some(um) = user_manager {
-            let num = um.users.len();
-            info!("<< init poll_read_decrypted!! {:?}, {:?}.", user_manager.is_some(), num);
-        } else {
-            warn!("no user manager!!");
-        }
-
         loop {
             match self.state {
                 DecryptReadState::ReadHeader { ref key } => {
@@ -305,7 +295,6 @@ impl DecryptedReader {
         // Extensible Identity Header
         // https://github.com/Shadowsocks-NET/shadowsocks-specs/blob/main/2022-2-shadowsocks-2022-extensible-identity-headers.md
         let mut cipher = if require_eih {
-            // if let Some(ref user_manager) = self.user_manager {
             if let Some(user_manager) = user_manager {
                 // Assume we have at least 1 EIH
                 if header_chunk.len() < 16 {
@@ -339,15 +328,10 @@ impl DecryptedReader {
                 );
 
                 match user_manager.get_user_by_hash(user_hash) {
-                    // TODO!!! Im here so keep going. need to unlock user manager here!!
-                    // match user_manager.clone_user_by_hash(user_hash) {
-
                     None => {
-                        info!("User Not Found :( ");
                         return Err(ProtocolError::InvalidClientUser(Bytes::copy_from_slice(user_hash))).into();
                     }
                     Some(user) => {
-                        info!("User Found!!");
                         trace!("{:?} chosen by EIH", user);
                         self.user_key = Some(Bytes::copy_from_slice(user.key()));
                         TcpCipher::new(self.method, user.key(), salt)
