@@ -109,7 +109,7 @@ impl TcpServer {
                 if let Err(err) = client.serve().await {
                     debug!("tcp server stream aborted with error: {}", err);
                 }
-            };
+            });
         }
     }
 }
