@@ -23,6 +23,7 @@ use shadowsocks::{
 };
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::{sync::Mutex, task::JoinHandle, time};
+use shadowsocks::manager::error::Error;
 use shadowsocks::manager::protocol::{AddUserRequest, AddUserResponse, RemoveUserRequest, RemoveUserResponse, ServerConfigOther};
 use crate::{
     acl::AccessControl,
@@ -240,7 +241,13 @@ impl Manager {
                 }
                 ManagerRequest::List(..) => {
                     let rsp = self.handle_list().await;
-                    let _ = self.listener.send_to(&rsp, &peer_addr).await;
+                    // let _ = self.listener.send_to(&rsp, &peer_addr).await;
+                    match self.listener.send_to(&rsp, &peer_addr).await {
+                        Ok(_) => {}
+                        Err(e) => {
+                            warn!("failed to send list response: {:?}", e);
+                        }
+                    }
                 }
                 ManagerRequest::Ping(..) => {
                     let rsp = self.handle_ping().await;

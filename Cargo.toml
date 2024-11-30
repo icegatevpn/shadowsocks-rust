@@ -245,7 +245,10 @@ libc = { version = "0.2", features = ["extra_traits"] }
 rand = "0.8"
 
 futures = "0.3"
-tokio = { version = "1", features = ["rt", "signal"] }
+tokio = { version = "1", features = ["rt", "signal", "macros", "signal"] }
+axum = "0.7"
+uuid = { version = "1.0", features = ["v4"] }
+async-channel = "2.3.1"
 
 ipnet = { version = "2.10", optional = true }
 

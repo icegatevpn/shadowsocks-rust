@@ -11,7 +11,11 @@ use std::{
     collections::HashMap,
     sync::Arc,
 };
-use log::{debug, warn};
+use std::io::{Error, Read, Write};
+use std::os::unix::net::UnixStream;
+use std::path::Path;
+use futures::SinkExt;
+use log::{debug, error, warn};
 use tokio::{
     net::UnixDatagram,
     sync::{Mutex, oneshot, mpsc},
@@ -19,6 +23,8 @@ use tokio::{
 };
 use tokio::time::sleep;
 use uuid::Uuid;
+use async_channel::{unbounded, Receiver, RecvError, SendError, Sender};
+use crate::service::domain_connection::connect_domain_socket;
 
 #[derive(Debug, Deserialize)]
 struct ManagerCommand {
@@ -38,134 +44,96 @@ const COMMAND_TIMEOUT_SECS: u64 = 5;
 const MAX_RETRIES: u8 = 3;
 const RETRY_DELAY_MS: u64 = 500;
 
-#[derive(Clone)]
-struct AppState {
-    command_tx: mpsc::Sender<(String, oneshot::Sender<String>)>,
+// Structure to track pending requests
+struct PendingRequest {
+    response_sender: oneshot::Sender<String>,
+    command_id: String,
 }
 
-async fn connect_with_retry(socket_path: &str) -> Result<UnixDatagram, std::io::Error> {
-    let mut last_error = None;
-
-    for attempt in 1..=MAX_RETRIES {
-        match UnixDatagram::unbound() {
-            Ok(socket) => {
-                match socket.connect(socket_path) {
-                    Ok(()) => {
-                        println!("Successfully connected to socket on attempt {}", attempt);
-                        return Ok(socket);
-                    }
-                    Err(e) => {
-                        println!("Failed to connect on attempt {}: {}", attempt, e);
-                        last_error = Some(e);
-                    }
-                }
-            }
-            Err(e) => {
-                println!("Failed to create socket on attempt {}: {}", attempt, e);
-                last_error = Some(e);
-            }
-        }
-
-        if attempt < MAX_RETRIES {
-            println!("Waiting {}ms before retry...", RETRY_DELAY_MS);
-            sleep(Duration::from_millis(RETRY_DELAY_MS)).await;
-        }
-    }
-
-    Err(last_error.unwrap_or_else(|| {
-        std::io::Error::new(
-            std::io::ErrorKind::Other,
-            "Failed to connect to socket after all retries",
-        )
-    }))
+#[derive(Clone)]
+struct AppState {
+    command_tx: Sender<(String, String)>, // (command, command_id)
+    pending_requests: Arc<Mutex<HashMap<String, oneshot::Sender<String>>>>,
 }
 
 async fn socket_listener(
     socket_path: String,
-    mut command_rx: mpsc::Receiver<(String, oneshot::Sender<String>)>,
+    mut command_rx: Receiver<(String, String)>,
+    pending_requests: Arc<Mutex<HashMap<String, oneshot::Sender<String>>>>
 ) {
+    let mut from_socket: Option<Receiver<String>> = None;
+    let mut socket_sender: Option<Sender<String>> = None;
 
-    // wait a second for the socket to spin up before we try to connect
-    sleep(Duration::from_millis(1000)).await;
-    // Create response channels map - stores the oneshot senders
-    let response_channels = Arc::new(Mutex::new(
-        HashMap::<String, oneshot::Sender<String>>::new()
-    ));
-    let response_channels_clone = response_channels.clone();
+    while from_socket.is_none() {
 
-    // let (recv_socket, send_socket) = UnixDatagram::pair().expect("Failed to create socket pair");
+        let (to_domain, domain_receiver) = unbounded();
+        match connect_domain_socket(domain_receiver, &socket_path) {
+            Ok(ds) => {
+                from_socket = Some(ds);
+                socket_sender = Some(to_domain)
+            }
+            Err(e) => {
 
-    // Create socket for receiving
-    let recv_socket = UnixDatagram::unbound().expect("Failed to create receive socket");
-    recv_socket.connect(&socket_path).expect("Failed to connect receive socket");
-    // let recv_socket = connect_with_retry(&socket_path).expect("Failed to connect receive socket");
+                warn!("Nope: {:?} sleep....", e);
+                tokio::time::sleep(Duration::from_millis(1000)).await;
+            }
+        }
+    };
+    debug!("Domain connection established for {:?}",socket_path);
+    let socket_receiver = from_socket.unwrap();
+    let sender = socket_sender.unwrap();
 
-    // Create socket for sending
-    let send_socket = UnixDatagram::unbound().expect("Failed to create send socket");
-    send_socket.connect(&socket_path).expect("Failed to connect send socket");
-    // let send_socket = connect_with_retry(&socket_path).expect("Failed to connect send socket");
-
-
-
-    // Spawn receiver task
-    tokio::spawn(async move {
-        let mut buf = vec![0u8; MAX_RESPONSE_SIZE];
-        loop {
-            warn!("LISTENING to {}.......", socket_path);
-            match recv_socket.recv(&mut buf).await {
-                Ok(n) => {
-                    warn!("Received {} bytes from {}", n, socket_path);
-                    if let Ok(response) = String::from_utf8(buf[..n].to_vec()) {
-                        println!("Received response: {}", response);
-                        // Parse response to extract command ID
-                        // if let Some((id, message)) = response.split_once('\n') {
-                            let id = "ONE".to_string();
-                            let mut channels = response_channels_clone.lock().await;
-                            if let Some(sender) = channels.remove(id.trim()) {
-                                // Now correctly using the oneshot sender
-                                if let Err(e) = sender.send(response.trim().to_string()) {
-                                    eprintln!("Failed to send response through channel: {}", e);
-                                }
-                            }
-                        // }
+    tokio::spawn({
+        let pending_requests = pending_requests.clone();
+        async move {
+            while let Ok((command, command_id)) = command_rx.recv().await {
+                // if let Err(e) = sender.send(format!("{},{}", command_id, command)).await {
+                if let Err(e) = sender.send(command).await {
+                    error!("Failed to send command to socket: {}", e);
+                    // Clean up the pending request if send fails
+                    let mut requests = pending_requests.lock().await;
+                    if let Some(response_sender) = requests.remove(&command_id) {
+                        let _ = response_sender.send("Failed to send command to socket".to_string());
                     }
-                }
-                Err(e) => {
-                    eprintln!("Error receiving from socket: {}", e);
                 }
             }
         }
     });
 
-    // Handle incoming commands
-    while let Some((command, response_tx)) = command_rx.recv().await {
-        let id = "ONE".to_string();//Uuid::new_v4().to_string();
-        // let command_with_id = format!("{}\n{}", id, command);
+    // Spawn response handler
+    tokio::spawn(async move {
+        while let Ok(response) = socket_receiver.recv().await {
+            let command_id = "ONE".to_string();
+            let response_data = response;
 
-        {
-            let mut channels = response_channels.lock().await;
-            channels.insert(id.clone(), response_tx);
-
-            if let Err(e) = send_socket.send(command.as_bytes()).await {
-                eprintln!("Failed to send command: {}", e);
-                channels.remove(&id);
+            let mut requests = pending_requests.lock().await;
+            if let Some(sender) = requests.remove(&command_id) {
+                if sender.send(response_data).is_err() {
+                    error!("Failed to send response to request handler");
+                }
             }
         }
-    }
+    });
 }
 
 async fn handle_command(
     State(state): State<AppState>,
     Json(payload): Json<ManagerCommand>,
 ) -> impl IntoResponse {
-    let (tx, rx) = oneshot::channel();
 
-    let closed = state.command_tx.is_closed();
-    debug!("handle_command: {:?}, is closed: {:?}", payload.command, closed);
+    let (response_tx, response_rx) = oneshot::channel();
+    let command_id = "ONE".to_string();//Uuid::new_v4().to_string();
 
-    match state.command_tx.send((payload.command, tx)).await {
+    // Store the response channel
+    {
+        let mut pending_requests = state.pending_requests.lock().await;
+        pending_requests.insert(command_id.clone(), response_tx);
+    }
+
+    // match state.command_tx.send((payload.command)).await {
+    match state.command_tx.send((payload.command, command_id.clone())).await {
         Ok(_) => {
-            match timeout(Duration::from_secs(COMMAND_TIMEOUT_SECS), rx).await {
+            match timeout(Duration::from_secs(COMMAND_TIMEOUT_SECS), response_rx).await {
                 Ok(Ok(response)) => (
                     StatusCode::OK,
                     Json(ApiResponse {
@@ -205,14 +173,19 @@ async fn handle_command(
 
 pub async fn run_web_service(manager_socket_path: String) {
     // Create channel for commands
-    let (command_tx, command_rx) = mpsc::channel(32);
-
-    // Spawn the socket listener
-    tokio::spawn(socket_listener(manager_socket_path, command_rx));
+    let (command_tx, command_rx) = unbounded();
+    let pending_requests = Arc::new(Mutex::new(HashMap::new()));
+    
+    tokio::spawn(socket_listener(
+        manager_socket_path,
+        command_rx,
+        pending_requests.clone(),
+    ));
 
     // Create shared state
     let state = AppState {
         command_tx,
+        pending_requests
     };
 
     // Create router

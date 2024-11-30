@@ -9,7 +9,7 @@ use tokio::{
     self,
     runtime::{Builder, Runtime},
 };
-
+use tracing::debug;
 #[cfg(unix)]
 use shadowsocks_service::config::ManagerServerMode;
 use shadowsocks_service::{
@@ -29,6 +29,7 @@ use crate::{
     config::{Config as ServiceConfig, RuntimeMode},
     monitor, vparser,
 };
+use crate::service::web_service::run_web_service;
 
 /// Defines command line options
 pub fn define_command_line_options(mut app: Command) -> Command {
@@ -500,7 +501,9 @@ pub fn create(matches: &ArgMatches) -> Result<(Runtime, impl Future<Output = Exi
         info!("shadowsocks manager {} build {}", crate::VERSION, crate::BUILD_TIME);
 
         let mut builder = match service_config.runtime.mode {
-            RuntimeMode::SingleThread => Builder::new_current_thread(),
+            RuntimeMode::SingleThread => {
+                Builder::new_current_thread()
+            },
             #[cfg(feature = "multi-threaded")]
             RuntimeMode::MultiThread => {
                 let mut builder = Builder::new_multi_thread();
@@ -521,6 +524,9 @@ pub fn create(matches: &ArgMatches) -> Result<(Runtime, impl Future<Output = Exi
         let abort_signal = monitor::create_signal_monitor();
         let server = run_manager(config);
 
+        let manager_socket_path = "/tmp/ssm.sock".to_string();
+        tokio::spawn(run_web_service(manager_socket_path));
+        warn!("Started!!!");
         tokio::pin!(abort_signal);
         tokio::pin!(server);
 
