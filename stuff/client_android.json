@@ -1,0 +1,54 @@
+[
+	{
+		"server": "165.232.76.105",
+		"server_port": 8389,
+		"password": "IXI89vHsloGmeReGjl79XVtGRKzIIqhFWdf3KoH/NnM=",
+		"method": "aes-256-gcm",
+		"dns": "system",
+		"mode": "tcp_and_udp",
+		"locals": [
+			{
+				"local_address": "127.0.0.1",
+				"local_port": 1080,
+				"local_udp_address": "127.0.0.1",
+				"local_udp_port": 1080,
+				"mode": "tcp_and_udp"
+			},
+			{
+				"local_address": "127.0.0.1",
+				"local_port": 5450,
+				"local_dns_address": "local_dns_path",
+				"remote_dns_address": "dns.google",
+				"remote_dns_port": 53,
+				"protocol": "dns"
+			}
+		]
+	},
+	
+	
+	{
+		"server": "165.232.76.105",
+		"server_port": 8389,
+		"password": "IXI89vHsloGmeReGjl79XVtGRKzIIqhFWdf3KoH/NnM=",
+		"method": "aes-256-gcm",
+		"dns": "system",
+		"mode": "tcp_and_udp",
+		"locals": [
+			{
+				"local_address": "127.0.0.1",
+				"local_port": 1080,
+				"local_udp_address": "127.0.0.1",
+				"local_udp_port": 1080,
+				"mode": "tcp_and_udp"
+			},
+			{
+				"local_address": "127.0.0.1",
+				"local_port": 5450,
+				"local_dns_address": "local_dns_path",
+				"remote_dns_address": "dns.google",
+				"remote_dns_port": 53,
+				"protocol": "tun"
+			}
+		]
+	}
+]

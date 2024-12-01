@@ -2,9 +2,19 @@
 
 #[cfg(unix)]
 use std::path::PathBuf;
-use std::{collections::HashMap, error, fmt::{self, Debug, Display}, io, net::SocketAddr, str::{self, FromStr}, sync::Arc, time::Duration};
 use crate::manager::protocol::ServerConfigOther;
 use base64::{DecodeError, Engine as _};
+use std::{
+    collections::HashMap,
+    fmt::{self, Debug, Display},
+    io,
+    net::SocketAddr,
+    str::{self, FromStr},
+    sync::Arc,
+    time::Duration,
+};
+
+use base64::Engine as _;
 use byte_string::ByteStr;
 use bytes::Bytes;
 use cfg_if::cfg_if;
@@ -122,7 +132,7 @@ impl FromStr for Mode {
 
 struct ModeVisitor;
 
-impl<'de> serde::de::Visitor<'de> for ModeVisitor {
+impl serde::de::Visitor<'_> for ModeVisitor {
     type Value = Mode;
 
     fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
@@ -409,6 +419,22 @@ pub enum ServerSource {
     OnlineConfig,  //< Created from online configuration (SIP008)
 }
 
+/// Errors when creating a new ServerConfig
+#[derive(Debug, Clone, Error)]
+pub enum ServerConfigError {
+    /// Invalid base64 encoding of password
+    #[error("invalid key encoding for {0}, {1}")]
+    InvalidKeyEncoding(CipherKind, base64::DecodeError),
+
+    /// Invalid user key encoding
+    #[error("invalid iPSK encoding for {0}, {1}")]
+    InvalidUserKeyEncoding(CipherKind, base64::DecodeError),
+
+    /// Key length mismatch
+    #[error("invalid key length for {0}, expecting {1} bytes, but found {2} bytes")]
+    InvalidKeyLength(CipherKind, usize, usize),
+}
+
 /// Configuration for a server
 #[derive(Clone, Debug)]
 pub struct ServerConfig {
@@ -455,29 +481,23 @@ pub struct ServerConfig {
 }
 
 #[inline]
-fn make_derived_key(method: CipherKind, password: &str, enc_key: &mut [u8]) {
+fn make_derived_key(method: CipherKind, password: &str, enc_key: &mut [u8]) -> Result<(), ServerConfigError> {
     #[cfg(feature = "aead-cipher-2022")]
     if method.is_aead_2022() {
         // AEAD 2022 password is a base64 form of enc_key
         match AEAD2022_PASSWORD_BASE64_ENGINE.decode(password) {
             Ok(v) => {
                 if v.len() != enc_key.len() {
-                    panic!(
-                        "{} is expecting a {} bytes key, but password: {} ({} bytes after decode)",
-                        method,
-                        enc_key.len(),
-                        password,
-                        v.len()
-                    );
+                    return Err(ServerConfigError::InvalidKeyLength(method, enc_key.len(), v.len()));
                 }
                 enc_key.copy_from_slice(&v);
             }
             Err(err) => {
-                panic!("{method} password {password} is not base64 encoded, error: {err}");
+                return Err(ServerConfigError::InvalidKeyEncoding(method, err));
             }
         }
 
-        return;
+        return Ok(());
     }
 //  } else { // was I don't something here?
 //         openssl_bytes_to_key(password.as_bytes(), enc_key);
@@ -488,6 +508,8 @@ fn make_derived_key(method: CipherKind, password: &str, enc_key: &mut [u8]) {
         if #[cfg(any(feature = "stream-cipher", feature = "aead-cipher"))] {
             let _ = method;
             openssl_bytes_to_key(password.as_bytes(), enc_key);
+
+            Ok(())
         } else {
             // No default implementation.
             let _ = password;
@@ -509,7 +531,8 @@ pub fn method_support_eih(method: CipherKind) -> bool {
     )
 }
 
-fn password_to_keys<P>(method: CipherKind, password: P) -> (String, Box<[u8]>, Vec<Bytes>)
+#[allow(clippy::type_complexity)]
+fn password_to_keys<P>(method: CipherKind, password: P) -> Result<(String, Box<[u8]>, Vec<Bytes>), ServerConfigError>
 where
     P: Into<String>,
 {
@@ -524,7 +547,7 @@ where
                 warn!("method \"none\" doesn't need a password, which should be set as an empty String, but password.len() = {}", password.len());
             }
 
-            return (password, Vec::new().into_boxed_slice(), Vec::new());
+            return Ok((password, Vec::new().into_boxed_slice(), Vec::new()));
         }
 
         #[cfg(feature = "stream-cipher")]
@@ -532,7 +555,7 @@ where
             // TABLE cipher doesn't need key derivation.
             // Reference implemenation: shadowsocks-libev, shadowsocks (Python)
             let enc_key = password.clone().into_bytes().into_boxed_slice();
-            return (password, enc_key, Vec::new());
+            return Ok((password, enc_key, Vec::new()));
         }
 
         #[allow(unreachable_patterns)]
@@ -551,7 +574,7 @@ where
         let upsk = split_iter.next().expect("uPSK");
 
         let mut enc_key = vec![0u8; method.key_len()].into_boxed_slice();
-        make_derived_key(method, upsk, &mut enc_key);
+        make_derived_key(method, upsk, &mut enc_key)?;
 
         for ipsk in split_iter {
             match USER_KEY_BASE64_ENGINE.decode(ipsk) {
@@ -559,32 +582,32 @@ where
                     identity_keys.push(Bytes::from(v));
                 }
                 Err(err) => {
-                    panic!("iPSK {ipsk} is not base64 encoded, error: {err}");
+                    return Err(ServerConfigError::InvalidUserKeyEncoding(method, err));
                 }
             }
         }
 
         identity_keys.reverse();
 
-        return (upsk.to_owned(), enc_key, identity_keys);
+        return Ok((upsk.to_owned(), enc_key, identity_keys));
     }
 
     let mut enc_key = vec![0u8; method.key_len()].into_boxed_slice();
-    make_derived_key(method, &password, &mut enc_key);
+    make_derived_key(method, &password, &mut enc_key)?;
 
-    (password, enc_key, Vec::new())
+    Ok((password, enc_key, Vec::new()))
 }
 
 impl ServerConfig {
     /// Create a new `ServerConfig`
-    pub fn new<A, P>(addr: A, password: P, method: CipherKind) -> ServerConfig
+    pub fn new<A, P>(addr: A, password: P, method: CipherKind) -> Result<ServerConfig, ServerConfigError>
     where
         A: Into<ServerAddr>,
         P: Into<String>,
     {
-        let (password, enc_key, identity_keys) = password_to_keys(method, password);
+        let (password, enc_key, identity_keys) = password_to_keys(method, password)?;
 
-        ServerConfig {
+        Ok(ServerConfig {
             addr: addr.into(),
             password,
             method,
@@ -599,22 +622,24 @@ impl ServerConfig {
             mode: Mode::TcpAndUdp, // Server serves TCP & UDP by default
             weight: ServerWeight::new(),
             source: ServerSource::Default,
-        }
+        })
     }
 
 
     /// Set encryption method
-    pub fn set_method<P>(&mut self, method: CipherKind, password: P)
+    pub fn set_method<P>(&mut self, method: CipherKind, password: P) -> Result<(), ServerConfigError>
     where
         P: Into<String>,
     {
         self.method = method;
 
-        let (password, enc_key, identity_keys) = password_to_keys(method, password);
+        let (password, enc_key, identity_keys) = password_to_keys(method, password)?;
 
         self.password = password;
         self.enc_key = enc_key;
         self.identity_keys = Arc::new(identity_keys);
+
+        Ok(())
     }
 
     /// Set plugin
@@ -962,8 +987,14 @@ impl ServerConfig {
             }
         };
 
-        let method = method.parse().expect("method");
-        let mut svrconfig = ServerConfig::new(addr, pwd, method);
+        let method = match method.parse::<CipherKind>() {
+            Ok(m) => m,
+            Err(err) => {
+                error!("failed to parse \"{}\" to CipherKind, err: {:?}", method, err);
+                return Err(UrlParseError::InvalidMethod);
+            }
+        };
+        let mut svrconfig = ServerConfig::new(addr, pwd, method)?;
 
         if let Some(q) = parsed.query() {
             let query = match serde_urlencoded::from_bytes::<Vec<(String, String)>>(q.as_bytes()) {
@@ -1012,49 +1043,26 @@ impl ServerConfig {
 }
 
 /// Shadowsocks URL parsing Error
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Error)]
 pub enum UrlParseError {
-    ParseError(url::ParseError),
+    #[error("{0}")]
+    ParseError(#[from] url::ParseError),
+    #[error("URL must have \"ss://\" scheme")]
     InvalidScheme,
+    #[error("unknown encryption method")]
+    InvalidMethod,
+    #[error("invalid user info")]
     InvalidUserInfo,
+    #[error("missing host")]
     MissingHost,
+    #[error("invalid authentication info")]
     InvalidAuthInfo,
+    #[error("invalid server address")]
     InvalidServerAddr,
+    #[error("invalid query string")]
     InvalidQueryString,
-}
-
-impl From<url::ParseError> for UrlParseError {
-    fn from(err: url::ParseError) -> UrlParseError {
-        UrlParseError::ParseError(err)
-    }
-}
-
-impl fmt::Display for UrlParseError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match *self {
-            UrlParseError::ParseError(ref err) => fmt::Display::fmt(err, f),
-            UrlParseError::InvalidScheme => write!(f, "URL must have \"ss://\" scheme"),
-            UrlParseError::InvalidUserInfo => write!(f, "invalid user info"),
-            UrlParseError::MissingHost => write!(f, "missing host"),
-            UrlParseError::InvalidAuthInfo => write!(f, "invalid authentication info"),
-            UrlParseError::InvalidServerAddr => write!(f, "invalid server address"),
-            UrlParseError::InvalidQueryString => write!(f, "invalid query string"),
-        }
-    }
-}
-
-impl error::Error for UrlParseError {
-    fn source(&self) -> Option<&(dyn error::Error + 'static)> {
-        match *self {
-            UrlParseError::ParseError(ref err) => Some(err as &dyn error::Error),
-            UrlParseError::InvalidScheme => None,
-            UrlParseError::InvalidUserInfo => None,
-            UrlParseError::MissingHost => None,
-            UrlParseError::InvalidAuthInfo => None,
-            UrlParseError::InvalidServerAddr => None,
-            UrlParseError::InvalidQueryString => None,
-        }
-    }
+    #[error("{0}")]
+    ServerConfigError(#[from] ServerConfigError),
 }
 
 impl FromStr for ServerConfig {
@@ -1138,7 +1146,7 @@ impl Display for ServerAddr {
 
 struct ServerAddrVisitor;
 
-impl<'de> serde::de::Visitor<'de> for ServerAddrVisitor {
+impl serde::de::Visitor<'_> for ServerAddrVisitor {
     type Value = ServerAddr;
 
     fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
@@ -1323,7 +1331,7 @@ impl Display for ManagerAddr {
 
 struct ManagerAddrVisitor;
 
-impl<'de> serde::de::Visitor<'de> for ManagerAddrVisitor {
+impl serde::de::Visitor<'_> for ManagerAddrVisitor {
     type Value = ManagerAddr;
 
     fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
@@ -1464,5 +1472,16 @@ impl FromStr for ReplayAttackPolicy {
             "reject" => Ok(ReplayAttackPolicy::Reject),
             _ => Err(ReplayAttackPolicyError),
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_server_config_from_url() {
+        let server_config = ServerConfig::from_url("ss://foo:bar@127.0.0.1:9999");
+        assert!(matches!(server_config, Err(UrlParseError::InvalidMethod)));
     }
 }

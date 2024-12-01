@@ -74,6 +74,12 @@ ignore = [
     #{ id = "RUSTSEC-0000-0000", reason = "you can specify a reason the advisory is ignored" },
     #"a-crate-that-is-yanked@0.1.1", # you can also ignore yanked crate versions if you wish
     #{ crate = "a-crate-that-is-yanked@0.1.1", reason = "you can specify why you are ignoring the yanked crate" },
+
+    # https://github.com/estk/log4rs/pull/351
+    { id = "RUSTSEC-2024-0388", reason = "log4rs PRs are not merged yet" },
+    # https://github.com/spacejam/sled/issues/1514
+    # https://github.com/notify-rs/notify/pull/652
+    { id = "RUSTSEC-2024-0384", reason = "notify, sled are not updated yet" },
 ]
 # If this is true, then cargo deny will use the git executable to fetch advisory database.
 # If this is false, then it uses a built-in git library.
@@ -231,10 +237,10 @@ skip-tree = [
 [sources]
 # Lint level for what to happen when a crate from a crate registry that is not
 # in the allow list is encountered
-unknown-registry = "warn"
+unknown-registry = "deny"
 # Lint level for what to happen when a crate from a git repository that is not
 # in the allow list is encountered
-unknown-git = "warn"
+unknown-git = "deny"
 # List of URLs for allowed crate registries. Defaults to the crates.io index
 # if not specified. If it is specified but empty, no registries are allowed.
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]

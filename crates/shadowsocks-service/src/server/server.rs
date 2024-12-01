@@ -25,7 +25,7 @@ use super::{context::ServiceContext, tcprelay::TcpServer, udprelay::UdpServer};
 
 /// Shadowsocks Server Builder
 pub struct ServerBuilder {
-    context: Arc<ServiceContext>,
+    context: ServiceContext,
     svr_cfg: ServerConfig,
     udp_expiry_duration: Option<Duration>,
     udp_capacity: Option<usize>,
@@ -36,11 +36,11 @@ pub struct ServerBuilder {
 impl ServerBuilder {
     /// Create a new server builder from configuration
     pub fn new(svr_cfg: ServerConfig) -> ServerBuilder {
-        ServerBuilder::with_context(Arc::new(ServiceContext::new()), svr_cfg)
+        ServerBuilder::with_context(ServiceContext::new(), svr_cfg)
     }
 
     /// Create a new server builder with context
-    pub fn with_context(context: Arc<ServiceContext>, svr_cfg: ServerConfig) -> ServerBuilder {
+    fn with_context(context: ServiceContext, svr_cfg: ServerConfig) -> ServerBuilder {
         ServerBuilder {
             context,
             svr_cfg,
@@ -63,8 +63,7 @@ impl ServerBuilder {
 
     /// Set `ConnectOpts`
     pub fn set_connect_opts(&mut self, opts: ConnectOpts) {
-        let context = Arc::get_mut(&mut self.context).expect("cannot set ConnectOpts on a shared context");
-        context.set_connect_opts(opts)
+        self.context.set_connect_opts(opts)
     }
 
     /// Set UDP association's expiry duration
@@ -89,14 +88,12 @@ impl ServerBuilder {
 
     /// Set customized DNS resolver
     pub fn set_dns_resolver(&mut self, resolver: Arc<DnsResolver>) {
-        let context = Arc::get_mut(&mut self.context).expect("cannot set DNS resolver on a shared context");
-        context.set_dns_resolver(resolver)
+        self.context.set_dns_resolver(resolver)
     }
 
     /// Set access control list
     pub fn set_acl(&mut self, acl: Arc<AccessControl>) {
-        let context = Arc::get_mut(&mut self.context).expect("cannot set ACL on a shared context");
-        context.set_acl(acl);
+        self.context.set_acl(acl);
     }
 
     /// Set `AcceptOpts` for accepting new connections
@@ -106,14 +103,12 @@ impl ServerBuilder {
 
     /// Try to connect IPv6 addresses first if hostname could be resolved to both IPv4 and IPv6
     pub fn set_ipv6_first(&mut self, ipv6_first: bool) {
-        let context = Arc::get_mut(&mut self.context).expect("cannot set ipv6_first on a shared context");
-        context.set_ipv6_first(ipv6_first);
+        self.context.set_ipv6_first(ipv6_first);
     }
 
     /// Set security config
     pub fn set_security_config(&mut self, security: &SecurityConfig) {
-        let context = Arc::get_mut(&mut self.context).expect("cannot set security on a shared context");
-        context.set_security_config(security)
+        self.context.set_security_config(security)
     }
 
     /// Start the server
@@ -123,7 +118,9 @@ impl ServerBuilder {
     /// 3. Starts UDP server (listener)
     /// returns tuple <Server>, <Option<TcpUserManagerSender>, Option<UdpUserManagerSender>>
     pub async fn build(mut self) ->
-                                 io::Result<(Server, (Option<UnboundedSender<ServerUserManager>>, Option<UnboundedSender<ServerUserManager>>))> {
+                                 io::Result<(Server, (Option<UnboundedSender<ServerUserManager>>,
+                                                      Option<UnboundedSender<ServerUserManager>>))> {
+        let context = Arc::new(self.context);
         let mut plugin = None;
 
         if let Some(plugin_cfg) = self.svr_cfg.plugin() {
@@ -135,7 +132,7 @@ impl ServerBuilder {
         let mut tcp_server = None;
         let mut tcp_user_manager_sender: Option<UnboundedSender<ServerUserManager>> = None;
         if self.svr_cfg.mode().enable_tcp() {
-            let (server, sender) = TcpServer::new(self.context.clone(), self.svr_cfg.clone(), self.accept_opts.clone()).await?;
+            let (server, sender) = TcpServer::new(context.clone(), self.svr_cfg.clone(), self.accept_opts.clone()).await?;
             tcp_server = Some(server);
             tcp_user_manager_sender = Some(sender);
         }
@@ -144,7 +141,7 @@ impl ServerBuilder {
         let mut udp_user_manager_sender: Option<UnboundedSender<ServerUserManager>> = None;
         if self.svr_cfg.mode().enable_udp() {
             let (server, sender) = UdpServer::new(
-                self.context.clone(),
+                context.clone(),
                 self.svr_cfg.clone(),
                 self.udp_expiry_duration,
                 self.udp_capacity,
@@ -156,7 +153,7 @@ impl ServerBuilder {
         }
 
         Ok((Server {
-            context: self.context,
+            context,
             svr_cfg: self.svr_cfg,
             tcp_server,
             udp_server,
