@@ -7,6 +7,7 @@ use std::{
     sync::Arc,
     time::Duration,
 };
+
 use log::{debug, error, info, trace, warn};
 use shadowsocks::{
     crypto::CipherKind,
@@ -48,7 +49,6 @@ impl TcpServer {
             listener,
         }, tx))
     }
-
 
     /// Server's configuration
     pub fn server_config(&self) -> &ServerConfig {
@@ -104,13 +104,13 @@ impl TcpServer {
                 timeout: self.svr_cfg.timeout(),
             };
 
+            // tokio::join!(&listening);
             tokio::spawn(async move {
                 if let Err(err) = client.serve().await {
                     debug!("tcp server stream aborted with error: {}", err);
                 }
             });
         }
-
     }
 }
 

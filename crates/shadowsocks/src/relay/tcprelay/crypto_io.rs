@@ -20,7 +20,6 @@ use crate::{
     context::Context,
     crypto::{CipherCategory, CipherKind},
 };
-use log::{debug, info, warn};
 
 #[cfg(feature = "aead-cipher")]
 use super::aead::{DecryptedReader as AeadDecryptedReader, EncryptedWriter as AeadEncryptedWriter};
@@ -114,13 +113,6 @@ impl DecryptedReader {
             }
             #[cfg(feature = "aead-cipher-2022")]
             CipherCategory::Aead2022 => {
-                info!("cipher 2022 detected. Using AEAD cipher instead. <> <> <> ");
-                if let Some(um) = user_manager.clone() {
-                    let num = um.users.len();
-                    info!("---------- init poll_read_decrypted!! {:?}, {:?}.", user_manager.is_some(), num);
-                } else {
-                    warn!(" ---- no user manager!!  -----");
-                }
                 DecryptedReader::Aead2022(Aead2022DecryptedReader::with_user_manager(
                     stream_ty,
                     method,
@@ -157,9 +149,7 @@ impl DecryptedReader {
             }
             #[cfg(feature = "aead-cipher-2022")]
             DecryptedReader::Aead2022(ref mut reader, ref manager) => {
-                debug!("******************  **  **  **  **");
                 reader.poll_read_decrypted(cx, context, stream, buf, manager).map_err(Into::into)
-
             }
         }
     }
@@ -366,10 +356,6 @@ impl<S> fmt::Debug for CryptoStream<S> {
 }
 
 impl<S> CryptoStream<S> {
-
-    // pub fn set_user_manager_receiver(&mut self, receiver: Option<UnboundedReceiver<ServerUserManager>>) {
-    //     self.dec.set
-    // }
     /// Create a new CryptoStream with the underlying stream connection
     pub fn from_stream(
         context: &Context,
@@ -390,11 +376,9 @@ impl<S> CryptoStream<S> {
         method: CipherKind,
         key: &[u8],
         identity_keys: &[Bytes],
-        // user_manager: &Option<Arc<RwLock<ServerUserManager>>>
         user_manager: &Option<Arc<ArcSwapAny<Arc<ServerUserManager>>>>
     ) -> CryptoStream<S> {
         let category = method.category();
-
 
         if category == CipherCategory::None {
             // Fast-path for none cipher
@@ -443,19 +427,10 @@ impl<S> CryptoStream<S> {
         };
 
         let mut um_clone: Option<Arc<ServerUserManager>> = None;
-
-        warn!("!! <<<<< READ ArcSwap >>>>>");
-        if let Some(um) = user_manager.clone() {
-            info!(" ****** {:?}, {:?} users", user_manager.is_some(), (&*um.load()).users.len());
-        } else {
-            warn!(" **** no user manager!! **** ");
-        }
-
         if let Some(user_manager) = user_manager {
             um_clone = Some(Arc::from((&*user_manager.load()).to_owned()));
         }
 
-        // New each packet!!
         CryptoStream {
             stream,
             dec: DecryptedReader::with_user_manager(stream_ty, method, key, um_clone),
@@ -584,9 +559,6 @@ where
             ..
         } = *self;
         ready!(dec.poll_read_decrypted(cx, context, stream, buf))?;
-        // let ff = dec.poll_read_decrypted(cx, context, stream, buf);
-        // ready!(ff)?;
-
 
         if !*has_handshaked && dec.handshaked() {
             *has_handshaked = true;

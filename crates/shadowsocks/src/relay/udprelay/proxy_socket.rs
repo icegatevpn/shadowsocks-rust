@@ -172,7 +172,6 @@ impl<S> ProxySocket<S> {
     ) -> ProxySocket<S> {
         let key = svr_cfg.key().to_vec().into_boxed_slice();
         let method = svr_cfg.method();
-        error!("------------------- NEW FROM SUCKETR");
 
         // NOTE: svr_cfg.timeout() is not for this socket, but for associations.
         ProxySocket {
@@ -187,7 +186,6 @@ impl<S> ProxySocket<S> {
                 UdpSocketType::Client => svr_cfg.clone_identity_keys(),
                 UdpSocketType::Server => Arc::new(Vec::new()),
             },
-            // todo:: trace this down for UDP NOW!!! :(
             user_manager: match socket_type {
                 UdpSocketType::Client => None,
                 UdpSocketType::Server => svr_cfg.clone_user_manager(),
@@ -451,7 +449,6 @@ where
     fn decrypt_recv_buffer(
         &self,
         recv_buf: &mut [u8],
-        // pass in fixed user_manager option for each buffer (not receiver)
         user_manager: Option<&ServerUserManager>,
         strict: &bool,
     ) -> ProtocolResult<(usize, Address, Option<UdpSocketControlData>)> {
@@ -480,7 +477,6 @@ where
     pub async fn recv_with_ctrl(
         &self,
         recv_buf: &mut [u8],
-
     ) -> ProxySocketResult<(usize, Address, usize, Option<UdpSocketControlData>)> {
         let recv_n = match self.recv_timeout {
             None => self.io.recv(recv_buf).await?,
@@ -490,7 +486,7 @@ where
                 Err(..) => return Err(io::Error::from(ErrorKind::TimedOut).into()),
             },
         };
-        info!("ONE");
+
         let (n, addr, control) = match self.decrypt_recv_buffer(&mut recv_buf[..recv_n], self.user_manager.as_deref(), &self.strict) {
             Ok(x) => x,
             Err(err) => return Err(ProxySocketError::ProtocolError(err)),
@@ -542,8 +538,7 @@ where
                 Err(..) => return Err(io::Error::from(ErrorKind::TimedOut).into()),
             },
         };
-        // todo THIS ONE!!!
-        info!("TWO");
+
         let (n, addr, control) = match self.decrypt_recv_buffer(&mut recv_buf[..recv_n], user_manager, &self.strict) {
             Ok(x) => x,
             Err(err) => return Err(ProxySocketError::ProtocolErrorWithPeer(target_addr, err)),
@@ -583,7 +578,6 @@ where
         ready!(self.io.poll_recv(cx, recv_buf))?;
 
         let n_recv = recv_buf.filled().len();
-        info!("THREE");
         match self.decrypt_recv_buffer(recv_buf.filled_mut(), self.user_manager.as_deref(), &self.strict) {
             Ok(x) => Poll::Ready(Ok((x.0, x.1, n_recv, x.2))),
             Err(err) => Poll::Ready(Err(ProxySocketError::ProtocolError(err))),
@@ -609,7 +603,7 @@ where
         recv_buf: &mut ReadBuf,
     ) -> Poll<ProxySocketResult<(usize, SocketAddr, Address, usize, Option<UdpSocketControlData>)>> {
         let src = ready!(self.io.poll_recv_from(cx, recv_buf))?;
-        info!("FOUR");
+
         let n_recv = recv_buf.filled().len();
         match self.decrypt_recv_buffer(recv_buf.filled_mut(), self.user_manager.as_deref(), &self.strict) {
             Ok(x) => Poll::Ready(Ok((x.0, src, x.1, n_recv, x.2))),
