@@ -521,11 +521,18 @@ pub fn create(matches: &ArgMatches) -> Result<(Runtime, impl Future<Output = Exi
     };
 
     let main_fut = async move {
+        // Reads the public Ip address from the first server address in the config.
+        // todo setup dynamic port!
+        let host = format!("{}:8080",config.server.first()
+            .expect("No server")
+            .config.addr()
+            .host()
+        );
         let abort_signal = monitor::create_signal_monitor();
         let server = run_manager(config);
 
         let manager_socket_path = "/tmp/ssm.sock".to_string();
-        tokio::spawn(run_web_service(manager_socket_path));
+        tokio::spawn(run_web_service(manager_socket_path, host));
         warn!("Started!!!");
         tokio::pin!(abort_signal);
         tokio::pin!(server);

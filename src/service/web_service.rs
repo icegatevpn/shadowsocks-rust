@@ -8,7 +8,7 @@ use axum::{
     Json, Router,
 };
 use futures::SinkExt;
-use log::{debug, error, warn};
+use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
 use std::io::{Error, Read, Write};
 use std::os::unix::net::UnixStream;
@@ -222,7 +222,7 @@ macro_rules! make_command_handler {
 make_command_handler!(cmd_list, "list");
 make_command_handler!(cmd_ping, "ping");
 
-pub async fn run_web_service(manager_socket_path: String) {
+pub async fn run_web_service(manager_socket_path: String, host_name: String) {
     // Create channel for commands
     let (command_tx, command_rx) = unbounded();
     let pending_requests = Arc::new(Mutex::new(HashMap::new()));
@@ -247,11 +247,11 @@ pub async fn run_web_service(manager_socket_path: String) {
         .route("/ping", get(cmd_ping))
         .with_state(state);
 
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:8080")
+    let listener = tokio::net::TcpListener::bind(host_name.clone())
         .await
         .expect("Failed to bind to port 8080");
 
-    println!("Web service listening on http://127.0.0.1:8080");
+    info!("Web service listening on http://{}",host_name);
 
     axum::serve(listener, app).await.expect("Web service failed");
 }
