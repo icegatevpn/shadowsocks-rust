@@ -219,55 +219,55 @@ async fn tcp_tunnel_aead_2022_chacha20() {
     .unwrap();
 }
 
-
-#[tokio::test]
-async fn dothing() {
-    #[derive(Debug, Default)]
-    struct Stuff {
-        // ... Stuff in here ...
-    }
-
-    let config = Arc::new(ArcSwap::from_pointee(Stuff::default()));
-
-    // We wrap the ArcSwap into an Arc, so we can share it between threads.
-    let config = ArcSwap::from_pointee(Stuff::default());
-
-    let terminate = Arc::new(AtomicBool::new(false));
-    let mut threads = Vec::new();
-
-    // The configuration thread
-    threads.push(thread::spawn({
-        let config = config;
-        let terminate = Arc::clone(&terminate);
-        move || {
-            while !terminate.load(Ordering::Relaxed) {
-                thread::sleep(Duration::from_secs(6));
-                // Actually, load it from somewhere
-                let new_config = Arc::new(Stuff::default());
-                config.store(new_config);
-            }
-        }
-    }));
-
-    // The worker thread
-    for _ in 0..10 {
-        threads.push(thread::spawn({
-            let config = Arc::clone(&config);
-            let terminate = Arc::clone(&terminate);
-            move || {
-                while !terminate.load(Ordering::Relaxed) {
-                    // let work = Work::fetch();
-                    let config = *(config.load().clone());
-                    // work.perform(&config);
-                }
-            }
-        }));
-    }
-
-    // Terminate gracefully
-    terminate.store(true, Ordering::Relaxed);
-    for thread in threads {
-        thread.join().unwrap();
-    }
-}
+//
+// #[tokio::test]
+// async fn dothing() {
+//     #[derive(Debug, Default)]
+//     struct Stuff {
+//         // ... Stuff in here ...
+//     }
+//
+//     let config = Arc::new(ArcSwap::from_pointee(Stuff::default()));
+//
+//     // We wrap the ArcSwap into an Arc, so we can share it between threads.
+//     let config = ArcSwap::from_pointee(Stuff::default());
+//
+//     let terminate = Arc::new(AtomicBool::new(false));
+//     let mut threads = Vec::new();
+//
+//     // The configuration thread
+//     threads.push(thread::spawn({
+//         let config = config;
+//         let terminate = Arc::clone(&terminate);
+//         move || {
+//             while !terminate.load(Ordering::Relaxed) {
+//                 thread::sleep(Duration::from_secs(6));
+//                 // Actually, load it from somewhere
+//                 let new_config = Arc::new(Stuff::default());
+//                 config.store(new_config);
+//             }
+//         }
+//     }));
+//
+//     // The worker thread
+//     for _ in 0..10 {
+//         threads.push(thread::spawn({
+//             let config = Arc::clone(&config.load());
+//             let terminate = Arc::clone(&terminate);
+//             move || {
+//                 while !terminate.load(Ordering::Relaxed) {
+//                     // let work = Work::fetch();
+//                     let config = *(config.clone());
+//                     // work.perform(&config);
+//                 }
+//             }
+//         }));
+//     }
+//
+//     // Terminate gracefully
+//     terminate.store(true, Ordering::Relaxed);
+//     for thread in threads {
+//         thread.join().unwrap();
+//     }
+// }
 

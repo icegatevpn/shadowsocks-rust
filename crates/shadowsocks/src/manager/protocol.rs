@@ -6,7 +6,8 @@ use std::{
     str,
     string::ToString,
 };
-use log::error;
+use std::fmt::{Display, Formatter};
+use log::{debug, error};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use bytes::BufMut;
@@ -23,7 +24,11 @@ pub struct ServerUserConfig {
     pub name: String,
     pub password: String,
 }
-
+impl Display for ServerUserConfig {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{{\"name\":{:?}, \"password\":{:?}}}", self.name, self.password)
+    }
+}
 /// Server's configuration
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ServerConfigOther {
@@ -93,9 +98,27 @@ impl ManagerProtocol for RemoveUserResponse {
 }
 
 /// add User request
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct AddUser {
+    pub server_port: u16,
+    pub users: Vec<ServerUserConfig>
+}
+impl Display for AddUser {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{{\"server_port\":{}, \"users\":[", self.server_port)?;
+        for (i, user) in self.users.iter().enumerate() {
+            if i > 0 {
+                write!(f, ", ")?;
+            }
+            write!(f, "{}", user)?;
+        }
+        write!(f, "]}}")
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct AddUserRequest {
-    pub config: ServerConfigOther,
+    pub config: AddUser,
 }
 
 impl ManagerProtocol for AddUserRequest {
@@ -135,7 +158,7 @@ impl ManagerProtocol for AddUserResponse {
     }
 
     fn to_bytes(&self) -> Result<Vec<u8>, Error> {
-        let mut vec = b"addUser".to_vec();
+        let mut vec = b"User Added".to_vec();
         vec.push(b'\n');
         Ok(vec)
     }
@@ -408,7 +431,6 @@ impl ManagerRequest {
 impl ManagerProtocol for ManagerRequest {
     fn from_bytes(buf: &[u8]) -> Result<ManagerRequest, Error> {
         let mut nsplit = buf.splitn(2, |b| *b == b':');
-
         let cmd = nsplit.next().expect("first element shouldn't be None");
         match str::from_utf8(cmd)?.trim() {
             "add" => match nsplit.next() {

@@ -24,6 +24,11 @@ use tokio::{
 };
 use tokio::time::error::Elapsed;
 use uuid::Uuid;
+use serde_json::{Result, Value};
+use shadowsocks_service::shadowsocks::manager::protocol::{ServerConfigOther, ServerUserConfig};
+use shadowsocks_service::shadowsocks::ServerConfig;
+use shadowsocks::manager::protocol::AddUser;
+use shadowsocks_service::shadowsocks;
 
 #[derive(Debug, Deserialize)]
 struct ManagerCommand {
@@ -84,7 +89,6 @@ async fn socket_listener(
         let pending_requests = pending_requests.clone();
         async move {
             while let Ok((command, command_id)) = command_rx.recv().await {
-                // if let Err(e) = sender.send(format!("{},{}", command_id, command)).await {
                 if let Err(e) = sender.send(command).await {
                     error!("Failed to send command to socket: {}", e);
                     // Clean up the pending request if send fails
@@ -174,7 +178,7 @@ async fn send_command(
         let mut pending_requests = state.pending_requests.lock().await;
         pending_requests.insert(command_id.clone(), response_tx);
     }
-
+    info!("Sending command to socket {}", command);
     let result = state.command_tx.send((command, command_id.clone())).await;
 
     // Clean up callback on completion
@@ -202,6 +206,20 @@ async fn send_command(
 }
 async fn cmd_custom(State(state): State<AppState>, command: String) -> impl IntoResponse {
     send_command(&state, command, COMMAND_TIMEOUT_SECS).await
+}
+
+
+/* POST Body content with json like so:
+    {"server_port":8387,"users":[
+        {"name":"user666","password":"a5b/0RGhOFvLKONeELya+nstg0S+O+Jn2T5x59AbFrM="}]
+    }
+ */
+async fn add_user(State(state): State<AppState>, command: String) -> impl IntoResponse {
+    let config:AddUser = serde_json::from_str(&command).expect("json parse failed");
+    let new_command = format!("addu:{}", config);
+
+    debug!("Command: {:?}", new_command);
+    send_command(&state, new_command, COMMAND_TIMEOUT_SECS).await
 }
 
 // Macro to generate command handler functions
@@ -245,6 +263,7 @@ pub async fn run_web_service(manager_socket_path: String, host_name: String) {
         .route("/command", post(handle_command))
         .route("/list", get(cmd_list))
         .route("/ping", get(cmd_ping))
+        .route("/add_user", post(add_user))
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind(host_name.clone())

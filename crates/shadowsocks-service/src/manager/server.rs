@@ -24,7 +24,7 @@ use shadowsocks::{
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::{sync::Mutex, task::JoinHandle, time};
 use shadowsocks::manager::error::Error;
-use shadowsocks::manager::protocol::{AddUserRequest, AddUserResponse, RemoveUserRequest, RemoveUserResponse, ServerConfigOther};
+use shadowsocks::manager::protocol::{AddUser, AddUserRequest, AddUserResponse, RemoveUserRequest, RemoveUserResponse, ServerConfigOther};
 use crate::{
     acl::AccessControl,
     config::{ManagerConfig, ManagerServerHost, ManagerServerMode, SecurityConfig},
@@ -70,11 +70,9 @@ impl ServerInstance {
     }
 
     fn update_user_manager(&mut self, manager:&ServerUserManager) {
-        debug!("UPDATE USER MANAGER !!!!!!");
         self.svr_cfg.set_user_manager(manager.clone());
         self.udp_user_manager_sender.clone().unwrap().send(manager.clone()).unwrap();
         self.tcp_user_manager_sender.clone().unwrap().send(manager.clone()).unwrap();
-        debug!("DID IT !!!!!!");
     }
 }
 
@@ -255,7 +253,12 @@ impl Manager {
                 }
                 ManagerRequest::AddUser(ref req) => match self.handle_add_user(req).await {
                     Ok(a) => {
-                        debug!("<< added user: {:?}", a);
+                        match self.listener.send_to(&a, &peer_addr).await {
+                            Ok(_) => {}
+                            Err(e) => {
+                                warn!("failed to send AddUser response: {:?}", e);
+                            }
+                        }
                     }
                     Err(e) => {
                         warn!("added user failed: {}", e);
@@ -594,31 +597,6 @@ impl Manager {
         found
     }
 
-    pub fn user_manager_with_users(config: &ServerConfigOther) -> io::Result<ServerUserManager> {
-        let mut user_manager = ServerUserManager::new();
-        if let Some(ref users) = config.users {
-            for user in users.iter() {
-                let user = match ServerUser::with_encoded_key(&user.name, &user.password) {
-                    Ok(u) => u,
-                    Err(..) => {
-                        error!(
-                            "users[].password must be encoded with base64, but found: {}",
-                            user.password
-                        );
-
-                        return Err(io::Error::new(
-                            io::ErrorKind::Other,
-                            "users[].password must be encoded with base64",
-                        ));
-                    }
-                };
-
-                user_manager.add_user(user);
-            }
-        }
-        Ok(user_manager)
-    }
-
     async fn handle_remove_user(&self, remove_request: &RemoveUserRequest) ->  io::Result<RemoveUserResponse> {
         let user_hash: String = remove_request.key.clone();
         let key_in = ServerUser::str_to_key(&user_hash).expect("failed to decode Key");
@@ -654,7 +632,7 @@ impl Manager {
         let new_config = &req.config;
         let port  = new_config.server_port;
         if let Some(mut existing_config) =self.get_config(port).await {
-            match Self::user_manager_with_users(new_config) {
+            match ServerUserManager::user_manager_with_users(&new_config.users) {
                 Ok(mut new_manager) => {
                     if let Some(old_manager) = existing_config.user_manager() {
                         old_manager.users_iter().for_each(|u| {
@@ -747,8 +725,7 @@ impl Manager {
         };
 
         svr_cfg.set_mode(mode.unwrap_or(self.svr_cfg.mode));
-
-        match Self::user_manager_with_users(req) {
+        match ServerUserManager::user_manager_with_users(req.users.as_ref().expect("missing users")) {
             Ok(manager) => {
                 svr_cfg.set_user_manager(manager);
             }

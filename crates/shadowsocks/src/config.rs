@@ -2,7 +2,7 @@
 
 #[cfg(unix)]
 use std::path::PathBuf;
-use crate::manager::protocol::ServerConfigOther;
+use crate::manager::protocol::{ServerConfigOther, ServerUserConfig};
 use base64::{DecodeError, Engine as _};
 use std::{
     collections::HashMap,
@@ -348,32 +348,36 @@ impl ServerUserManager {
     pub fn new() -> ServerUserManager {
         ServerUserManager { users: HashMap::new() }
     }
-    //  todo copy this
-    pub fn from_server_config_other(server_config: ServerConfigOther) -> io::Result<ServerUserManager> {
+
+    pub fn user_manager_with_users(config: &Vec<ServerUserConfig>) -> io::Result<ServerUserManager> {
         let mut user_manager = ServerUserManager::new();
-        if let Some(ref users) = server_config.users {
-            for user in users.iter() {
-                let user = match ServerUser::with_encoded_key(&user.name, &user.password) {
-                    Ok(u) => u,
-                    Err(..) => {
-                        error!(
-                        "users[].password must be encoded with base64, but found: {}",
-                        user.password
-                    );
+        // if let Some(ref users) = config.users {
+        for user in config.iter() {
+            let user = match ServerUser::with_encoded_key(&user.name, &user.password) {
+                Ok(u) => u,
+                Err(..) => {
+                    error!(
+                            "users[].password must be encoded with base64, but found: {}",
+                            user.password
+                        );
 
-                        return Err(io::Error::new(
-                            io::ErrorKind::Other,
-                            "users[].password must be encoded with base64",
-                        ));
-                    }
-                };
+                    return Err(io::Error::new(
+                        io::ErrorKind::Other,
+                        "users[].password must be encoded with base64",
+                    ));
+                }
+            };
 
-                user_manager.add_user(user);
-            }
-
+            user_manager.add_user(user);
         }
+        // }
         Ok(user_manager)
     }
+
+    pub fn from_server_config_other(server_config: ServerConfigOther) -> io::Result<ServerUserManager> {
+        Self::user_manager_with_users(server_config.users.expect("failed to get users").as_ref())
+    }
+
     /// Add a new user
     pub fn add_user(&mut self, user: ServerUser)-> Option<Arc<ServerUser>> {
         self.users.insert(user.clone_identity_hash(), Arc::new(user))
@@ -684,22 +688,11 @@ impl ServerConfig {
     pub fn set_user_manager(&mut self, user_manager: ServerUserManager) {
         self.user_manager = Some(Arc::new(user_manager));
     }
-    // pub fn set_user_manager(&mut self, user_manager: Option<ServerUserManager>) {
-    //     self.user_manager = user_manager;
-    //
-    // }
 
     /// Get user manager (Server)
     pub fn user_manager(&self) -> Option<&ServerUserManager> {
         self.user_manager.as_deref()
     }
-
-    // pub fn box_user_manager(&self) -> Option<Box<ServerUserManager>> {
-    //     match self.user_manager() {
-    //         Some(u) => Some(Box::new(u.clone())),
-    //         None => None,
-    //     }
-    // }
 
     /// Clone user manager (Server)
     pub fn clone_user_manager(&self) -> Option<Arc<ServerUserManager>> {
