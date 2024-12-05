@@ -10,25 +10,25 @@ use axum::{
 use futures::SinkExt;
 use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
+use serde_json::{Result, Value};
+use shadowsocks::manager::protocol::AddUser;
+use shadowsocks_service::shadowsocks;
+use shadowsocks_service::shadowsocks::manager::protocol::{ServerConfigOther, ServerUserConfig};
+use shadowsocks_service::shadowsocks::ServerConfig;
+use std::future::Future;
 use std::io::{Error, Read, Write};
 use std::os::unix::net::UnixStream;
 use std::path::Path;
-use std::{collections::HashMap, sync::Arc};
-use std::future::Future;
 use std::str::Bytes;
+use std::{collections::HashMap, sync::Arc};
+use tokio::time::error::Elapsed;
 use tokio::time::sleep;
 use tokio::{
     net::UnixDatagram,
     sync::{mpsc, oneshot, Mutex},
     time::{timeout, Duration},
 };
-use tokio::time::error::Elapsed;
 use uuid::Uuid;
-use serde_json::{Result, Value};
-use shadowsocks_service::shadowsocks::manager::protocol::{ServerConfigOther, ServerUserConfig};
-use shadowsocks_service::shadowsocks::ServerConfig;
-use shadowsocks::manager::protocol::AddUser;
-use shadowsocks_service::shadowsocks;
 
 #[derive(Debug, Deserialize)]
 struct ManagerCommand {
@@ -165,13 +165,9 @@ async fn handle_command(State(state): State<AppState>, Json(payload): Json<Manag
     }
 }
 
-async fn send_command(
-    state: &AppState,
-    command: String,
-    timeout_secs: u64,
-) -> (StatusCode, String) {
+async fn send_command(state: &AppState, command: String, timeout_secs: u64) -> (StatusCode, String) {
     let (response_tx, response_rx) = oneshot::channel();
-    let command_id = "ONE".to_string();// = Uuid::new_v4().to_string();
+    let command_id = "ONE".to_string(); // = Uuid::new_v4().to_string();
 
     // Store the response channel
     {
@@ -195,27 +191,26 @@ async fn send_command(
             }
             _ => {
                 cleanup().await;
-                (StatusCode::INTERNAL_SERVER_ERROR, "Command failed or timed out".to_string())
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Command failed or timed out".to_string(),
+                )
             }
-        }
-        Err(_) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "Failed to send command".to_string(),
-        ),
+        },
+        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "Failed to send command".to_string()),
     }
 }
 async fn cmd_custom(State(state): State<AppState>, command: String) -> impl IntoResponse {
     send_command(&state, command, COMMAND_TIMEOUT_SECS).await
 }
 
-
 /* POST Body content with json like so:
-    {"server_port":8387,"users":[
-        {"name":"user666","password":"a5b/0RGhOFvLKONeELya+nstg0S+O+Jn2T5x59AbFrM="}]
-    }
- */
+   {"server_port":8387,"users":[
+       {"name":"user666","password":"a5b/0RGhOFvLKONeELya+nstg0S+O+Jn2T5x59AbFrM="}]
+   }
+*/
 async fn add_user(State(state): State<AppState>, command: String) -> impl IntoResponse {
-    let config:AddUser = serde_json::from_str(&command).expect("json parse failed");
+    let config: AddUser = serde_json::from_str(&command).expect("json parse failed");
     let new_command = format!("addu:{}", config);
 
     debug!("Command: {:?}", new_command);
@@ -245,6 +240,14 @@ pub async fn run_web_service(manager_socket_path: String, host_name: String) {
     let (command_tx, command_rx) = unbounded();
     let pending_requests = Arc::new(Mutex::new(HashMap::new()));
 
+    // let database = Database::new("data/stuff.db").expect("failed to open database");
+    // debug!("Database connection opened: {:?}", database.conn);
+    // let text_user = database
+    //     .add_user("name".to_string(), "email".to_string(), false)
+    //     .expect("failed to add user");
+    // let users = database.list_users(false).expect("failed to list users");
+    // debug!("Users: {:?}", users);
+
     tokio::spawn(socket_listener(
         manager_socket_path,
         command_rx,
@@ -270,7 +273,7 @@ pub async fn run_web_service(manager_socket_path: String, host_name: String) {
         .await
         .expect("Failed to bind to port 8080");
 
-    info!("Web service listening on http://{}",host_name);
+    info!("Web service listening on http://{}", host_name);
 
     axum::serve(listener, app).await.expect("Web service failed");
 }

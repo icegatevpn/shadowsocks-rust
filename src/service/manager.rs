@@ -1,7 +1,7 @@
 //! Server Manager launchers
 
 use std::{future::Future, net::IpAddr, path::PathBuf, process::ExitCode, time::Duration};
-
+use std::path::Path;
 use clap::{builder::PossibleValuesParser, Arg, ArgAction, ArgGroup, ArgMatches, Command, ValueHint};
 use futures::future::{self, Either};
 use log::{info, trace, warn};
@@ -10,12 +10,14 @@ use tokio::{
     runtime::{Builder, Runtime},
 };
 use tracing::debug;
+use tracing::field::debug;
 #[cfg(unix)]
 use shadowsocks_service::config::ManagerServerMode;
 use shadowsocks_service::{
     acl::AccessControl,
     config::{Config, ConfigType, ManagerConfig, ManagerServerHost},
     run_manager,
+    mysql_db::Database,
     shadowsocks::{
         config::{ManagerAddr, Mode},
         crypto::{available_ciphers, CipherKind},
@@ -29,6 +31,7 @@ use crate::{
     config::{Config as ServiceConfig, RuntimeMode},
     monitor, vparser,
 };
+// use crate::service::mysql_db::Database;
 use crate::service::web_service::run_web_service;
 
 /// Defines command line options
@@ -43,6 +46,15 @@ pub fn define_command_line_options(mut app: Command) -> Command {
                 .value_parser(clap::value_parser!(PathBuf))
                 .value_hint(ValueHint::FilePath)
                 .help("Shadowsocks configuration file (https://shadowsocks.org/doc/configs.html), the only required fields are \"manager_address\" and \"manager_port\". Servers defined will be created when process is started."),
+        )
+        .arg(
+            Arg::new("DATABASE")
+                .short('D')
+                .long("database-path")
+                .num_args(1)
+                .action(ArgAction::Set)
+                .value_parser(clap::value_parser!(PathBuf))
+                .help("MySql database path"),
         )
         .arg(
             Arg::new("UDP_ONLY")
@@ -269,7 +281,8 @@ pub fn define_command_line_options(mut app: Command) -> Command {
 
 /// Create `Runtime` and `main` entry
 pub fn create(matches: &ArgMatches) -> Result<(Runtime, impl Future<Output = ExitCode>), ExitCode> {
-    let (config, runtime) = {
+    let (config, runtime, database) = {
+
         let config_path_opt = matches.get_one::<PathBuf>("CONFIG").cloned().or_else(|| {
             if !matches.contains_id("SERVER_CONFIG") {
                 match crate::config::get_default_config_path("manager.json") {
@@ -288,7 +301,7 @@ pub fn create(matches: &ArgMatches) -> Result<(Runtime, impl Future<Output = Exi
             Some(ref config_path) => match ServiceConfig::load_from_file(config_path) {
                 Ok(c) => c,
                 Err(err) => {
-                    eprintln!("loading config {config_path:?}, {err}");
+                    eprintln!("loading config e {config_path:?}, {err}");
                     return Err(crate::EXIT_CODE_LOAD_CONFIG_FAILURE.into());
                 }
             },
@@ -308,16 +321,57 @@ pub fn create(matches: &ArgMatches) -> Result<(Runtime, impl Future<Output = Exi
 
         trace!("{:?}", service_config);
 
+        let db_path = matches.get_one::<PathBuf>("DATABASE").cloned().or_else(||{None});
+
+        let database: Option<Database> = match db_path {
+            None => {None}
+            Some(path) => {
+                Some(Database::new(&path).expect("Failed to open database"))
+            }
+        };
+
         let mut config = match config_path_opt {
             Some(cpath) => match Config::load_from_file(&cpath, ConfigType::Manager) {
                 Ok(cfg) => cfg,
                 Err(err) => {
-                    eprintln!("loading config {cpath:?}, {err}");
                     return Err(crate::EXIT_CODE_LOAD_CONFIG_FAILURE.into());
                 }
             },
-            None => Config::new(ConfigType::Manager),
+            None => {
+                match database {
+                    None => {Config::new(ConfigType::Manager)}
+                    Some(ref db) => {
+                        if let Ok(config) = db.get_config(1) {
+                            match config {
+                                Some(cfg) => {
+                                    debug!("loading database config...");
+                                    Config::load_from_str(&cfg, ConfigType::Manager)
+                                }
+                                None => {
+                                    warn!("No Config found in DB");
+                                    Ok(Config::new(ConfigType::Manager))
+                                }
+                            }.unwrap()
+                        } else {
+                            return Err(crate::EXIT_CODE_LOAD_CONFIG_FAILURE.into());
+                        }
+
+                    }
+                }
+            },
         };
+        // Save config?
+        // match database {
+        //     None => {
+        //         debug!("Database connection FAILED");
+        //     }
+        //     Some(db) => {
+        //         debug!("Database connection opened: {:?}", db.conn);
+        //         let id = db.save_service_config(&config);
+        //         debug!("Saved: {:?}", id);
+        //     }
+        // }
+
 
         if matches.get_flag("TCP_NO_DELAY") {
             config.no_delay = true;
@@ -517,20 +571,22 @@ pub fn create(matches: &ArgMatches) -> Result<(Runtime, impl Future<Output = Exi
 
         let runtime = builder.enable_all().build().expect("create tokio Runtime");
 
-        (config, runtime)
+        (config, runtime, database)
     };
 
     let main_fut = async move {
         // Reads the public Ip address from the first server address in the config.
-        // todo setup dynamic port!
+        // let database = Database::new(Path::new("data/stuff.db"))
+        //     .expect("failed to open database");
+
         let host = format!("{}:8080",config.server.first()
             .expect("No server")
             .config.addr()
             .host()
         );
         let abort_signal = monitor::create_signal_monitor();
-        let server = run_manager(config);
-
+        let db = database.unwrap();
+        let server = run_manager(config, Some(&db));
         let manager_socket_path = "/tmp/ssm.sock".to_string();
         tokio::spawn(run_web_service(manager_socket_path, host));
         warn!("Started!!!");

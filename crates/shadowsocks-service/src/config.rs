@@ -64,7 +64,7 @@ use hickory_resolver::config::{NameServerConfig, ResolverConfig};
 use ipnet::IpNet;
 #[cfg(feature = "local-fake-dns")]
 use ipnet::{Ipv4Net, Ipv6Net};
-use log::warn;
+use log::{debug, warn};
 use serde::{Deserialize, Serialize};
 #[cfg(any(feature = "local-tunnel", feature = "local-dns"))]
 use shadowsocks::relay::socks5::Address;
@@ -1572,7 +1572,7 @@ impl Config {
                 }
             }
         }
-
+        debug!("ASDFASDFASDFASDF");
         match config_type {
             ConfigType::Local => {
                 // Standard config
@@ -1897,6 +1897,7 @@ impl Config {
                     }
                 }
             }
+
         }
 
         let server_source = match config_type {
@@ -2601,7 +2602,6 @@ impl Config {
     /// Load Config from a File
     pub fn load_from_file<P: AsRef<Path>>(filename: P, config_type: ConfigType) -> Result<Config, Error> {
         let filename = filename.as_ref();
-
         let mut reader = OpenOptions::new().read(true).open(filename)?;
         let mut content = String::new();
         reader.read_to_string(&mut content)?;

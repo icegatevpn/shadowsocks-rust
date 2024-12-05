@@ -93,6 +93,15 @@ pub fn define_command_line_options(mut app: Command) -> Command {
             .value_hint(ValueHint::FilePath)
             .help("Shadowsocks configuration file (https://shadowsocks.org/doc/configs.html)"),
     )
+    // .arg(
+    //     Arg::new("DATABASE")
+    //         .short('d')
+    //         .long("database-path")
+    //         .num_args(1)
+    //         .action(ArgAction::Set)
+    //         // .value_parser(vparser::parse_server_addr)
+    //         .help("MySql database path"),
+    // )
     .arg(
         Arg::new("LOCAL_ADDR")
             .short('b')
@@ -597,7 +606,7 @@ pub fn create(matches: &ArgMatches) -> Result<(Runtime, impl Future<Output = Exi
             Some(ref config_path) => match ServiceConfig::load_from_file(config_path) {
                 Ok(c) => c,
                 Err(err) => {
-                    eprintln!("loading config {config_path:?}, {err}");
+                    eprintln!("loading config c {config_path:?}, {err}");
                     return Err(crate::EXIT_CODE_LOAD_CONFIG_FAILURE.into());
                 }
             },
@@ -621,7 +630,7 @@ pub fn create(matches: &ArgMatches) -> Result<(Runtime, impl Future<Output = Exi
             Some(cpath) => match Config::load_from_file(&cpath, ConfigType::Local) {
                 Ok(cfg) => cfg,
                 Err(err) => {
-                    eprintln!("loading config {cpath:?}, {err}");
+                    eprintln!("loading config d {cpath:?}, {err}");
                     return Err(crate::EXIT_CODE_LOAD_CONFIG_FAILURE.into());
                 }
             },
