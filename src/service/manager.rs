@@ -2,6 +2,7 @@
 
 use std::{future::Future, net::IpAddr, path::PathBuf, process::ExitCode, time::Duration};
 use std::path::Path;
+use std::sync::Arc;
 use clap::{builder::PossibleValuesParser, Arg, ArgAction, ArgGroup, ArgMatches, Command, ValueHint};
 use futures::future::{self, Either};
 use log::{info, trace, warn};
@@ -9,6 +10,7 @@ use tokio::{
     self,
     runtime::{Builder, Runtime},
 };
+use tokio::sync::Mutex;
 use tracing::debug;
 use tracing::field::debug;
 #[cfg(unix)]
@@ -279,8 +281,12 @@ pub fn define_command_line_options(mut app: Command) -> Command {
     app
 }
 
+static SOCKET_PATH: &str =  "/tmp/ssm.sock";
+
 /// Create `Runtime` and `main` entry
 pub fn create(matches: &ArgMatches) -> Result<(Runtime, impl Future<Output = ExitCode>), ExitCode> {
+
+
     let (config, runtime, database) = {
 
         let config_path_opt = matches.get_one::<PathBuf>("CONFIG").cloned().or_else(|| {
@@ -330,48 +336,41 @@ pub fn create(matches: &ArgMatches) -> Result<(Runtime, impl Future<Output = Exi
             }
         };
 
+        let db_clone = database.clone();
         let mut config = match config_path_opt {
             Some(cpath) => match Config::load_from_file(&cpath, ConfigType::Manager) {
-                Ok(cfg) => cfg,
+                Ok(cfg) => {
+                    // we got a config file. Do we have a Database?
+                    if let Some(db) = db_clone {
+                        //use mutable database to save config file to tables
+
+                        // match db.save_config_to_tables(&cfg) {
+                        //     Ok(_) => {println!("saved config to Database");},
+                        //     Err(err) => {
+                        //         eprintln!("Error loading config {cpath:?}, {err}");
+                        //     }
+                        // }
+                    }
+                    cfg
+                },
                 Err(err) => {
                     return Err(crate::EXIT_CODE_LOAD_CONFIG_FAILURE.into());
                 }
             },
             None => {
+                // return Err(crate::EXIT_CODE_LOAD_CONFIG_FAILURE.into());
                 match database {
                     None => {Config::new(ConfigType::Manager)}
                     Some(ref db) => {
-                        if let Ok(config) = db.get_config(1) {
-                            match config {
-                                Some(cfg) => {
-                                    debug!("loading database config...");
-                                    Config::load_from_str(&cfg, ConfigType::Manager)
-                                }
-                                None => {
-                                    warn!("No Config found in DB");
-                                    Ok(Config::new(ConfigType::Manager))
-                                }
-                            }.unwrap()
+                        if let Ok(config) = db.get_config(1, SOCKET_PATH.to_string()) {
+                            Config::load_from_str(&config, ConfigType::Manager)
                         } else {
                             return Err(crate::EXIT_CODE_LOAD_CONFIG_FAILURE.into());
-                        }
-
+                        }.unwrap()
                     }
                 }
             },
         };
-        // Save config?
-        // match database {
-        //     None => {
-        //         debug!("Database connection FAILED");
-        //     }
-        //     Some(db) => {
-        //         debug!("Database connection opened: {:?}", db.conn);
-        //         let id = db.save_service_config(&config);
-        //         debug!("Saved: {:?}", id);
-        //     }
-        // }
-
 
         if matches.get_flag("TCP_NO_DELAY") {
             config.no_delay = true;
@@ -570,6 +569,9 @@ pub fn create(matches: &ArgMatches) -> Result<(Runtime, impl Future<Output = Exi
         };
 
         let runtime = builder.enable_all().build().expect("create tokio Runtime");
+        // if let Some(db) = database {
+        //
+        // }
 
         (config, runtime, database)
     };
@@ -587,8 +589,8 @@ pub fn create(matches: &ArgMatches) -> Result<(Runtime, impl Future<Output = Exi
         let abort_signal = monitor::create_signal_monitor();
         let db = database.unwrap();
         let server = run_manager(config, Some(&db));
-        let manager_socket_path = "/tmp/ssm.sock".to_string();
-        tokio::spawn(run_web_service(manager_socket_path, host));
+        // let manager_socket_path = "/tmp/ssm.sock".to_string();
+        tokio::spawn(run_web_service(SOCKET_PATH.to_string(), host));
         warn!("Started!!!");
         tokio::pin!(abort_signal);
         tokio::pin!(server);
