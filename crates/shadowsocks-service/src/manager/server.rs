@@ -31,6 +31,7 @@ use crate::{
     me_debug,
     net::FlowStat,
     server::ServerBuilder};
+use crate::mysql_db::Database;
 
 enum ServerInstanceMode {
     Builtin {
@@ -203,7 +204,7 @@ impl Manager {
     }
 
     /// Start serving
-    pub async fn run(mut self) -> io::Result<()> {
+    pub async fn run(mut self, mut database: Option<&mut Database>) -> io::Result<()> {
         let local_addr = self.listener.local_addr()?;
         info!("shadowsocks manager server listening on {}", local_addr);
 
@@ -254,7 +255,14 @@ impl Manager {
                 ManagerRequest::AddUser(ref req) => match self.handle_add_user(req).await {
                     Ok(a) => {
                         match self.listener.send_to(&a, &peer_addr).await {
-                            Ok(_) => {}
+                            Ok(_) => {
+                                // Added to config, add to database
+                                if let Some(ref mut db) = database {
+                                    if let Ok(_) = db.add_or_update_users(&req.config) {
+                                        debug!("add user success!");
+                                    }
+                                }
+                            }
                             Err(e) => {
                                 warn!("failed to send AddUser response: {:?}", e);
                             }

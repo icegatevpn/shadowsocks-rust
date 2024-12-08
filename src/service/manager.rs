@@ -287,7 +287,7 @@ static SOCKET_PATH: &str =  "/tmp/ssm.sock";
 pub fn create(matches: &ArgMatches) -> Result<(Runtime, impl Future<Output = ExitCode>), ExitCode> {
 
 
-    let (config, runtime, database) = {
+    let (config, runtime, mut database) = {
 
         let config_path_opt = matches.get_one::<PathBuf>("CONFIG").cloned().or_else(|| {
             if !matches.contains_id("SERVER_CONFIG") {
@@ -327,46 +327,54 @@ pub fn create(matches: &ArgMatches) -> Result<(Runtime, impl Future<Output = Exi
 
         trace!("{:?}", service_config);
 
-        let db_path = matches.get_one::<PathBuf>("DATABASE").cloned().or_else(||{None});
+        let mut database = matches.get_one::<PathBuf>("DATABASE").cloned()
+            .map(|path| Database::new(&path))
+            .transpose()
+            .expect("Failed to open database");
 
-        let database: Option<Database> = match db_path {
-            None => {None}
-            Some(path) => {
-                Some(Database::new(&path).expect("Failed to open database"))
-            }
-        };
-
-        let db_clone = database.clone();
+        // Load config and handle database updates
         let mut config = match config_path_opt {
-            Some(cpath) => match Config::load_from_file(&cpath, ConfigType::Manager) {
-                Ok(cfg) => {
-                    // we got a config file. Do we have a Database?
-                    if let Some(db) = db_clone {
-                        //use mutable database to save config file to tables
-
-                        // match db.save_config_to_tables(&cfg) {
-                        //     Ok(_) => {println!("saved config to Database");},
-                        //     Err(err) => {
-                        //         eprintln!("Error loading config {cpath:?}, {err}");
-                        //     }
-                        // }
+            Some(cpath) => {
+                // Load config from file first
+                let cfg = match Config::load_from_file(&cpath, ConfigType::Manager) {
+                    Ok(cfg) => cfg,
+                    Err(err) => {
+                        eprintln!("Error loading config {cpath:?}, {err}");
+                        return Err(crate::EXIT_CODE_LOAD_CONFIG_FAILURE.into());
                     }
-                    cfg
-                },
-                Err(err) => {
-                    return Err(crate::EXIT_CODE_LOAD_CONFIG_FAILURE.into());
+                };
+
+                // If we have both a config file and database, update the database
+                if let Some(ref mut db) = database {
+                    if let Err(err) = db.save_config_to_tables(&cfg) {
+                        eprintln!("Error saving config to database: {err}");
+                    } else {
+                        println!("Successfully saved config to database");
+                    }
                 }
+
+                cfg
             },
             None => {
-                // return Err(crate::EXIT_CODE_LOAD_CONFIG_FAILURE.into());
-                match database {
-                    None => {Config::new(ConfigType::Manager)}
-                    Some(ref db) => {
-                        if let Ok(config) = db.get_config(1, SOCKET_PATH.to_string()) {
-                            Config::load_from_str(&config, ConfigType::Manager)
-                        } else {
-                            return Err(crate::EXIT_CODE_LOAD_CONFIG_FAILURE.into());
-                        }.unwrap()
+                match &database {
+                    None => Config::new(ConfigType::Manager),
+                    Some(db) => {
+                        // Create base config with manager
+                        let mut config = Config::new(ConfigType::Manager);
+                        config.manager = Some(ManagerConfig::new(ManagerAddr::UnixSocketAddr(SOCKET_PATH.into())));
+
+                        // Load any additional server configs from DB
+                        match db.load_config_from_tables() {
+                            Ok(servers) => {
+                                // Copy over the server configs
+                                config.server = servers;
+                                config
+                            },
+                            Err(err) => {
+                                warn!("Failed to load config from database: {}", err);
+                                config
+                            }
+                        }
                     }
                 }
             },
@@ -569,9 +577,6 @@ pub fn create(matches: &ArgMatches) -> Result<(Runtime, impl Future<Output = Exi
         };
 
         let runtime = builder.enable_all().build().expect("create tokio Runtime");
-        // if let Some(db) = database {
-        //
-        // }
 
         (config, runtime, database)
     };
@@ -587,8 +592,8 @@ pub fn create(matches: &ArgMatches) -> Result<(Runtime, impl Future<Output = Exi
             .host()
         );
         let abort_signal = monitor::create_signal_monitor();
-        let db = database.unwrap();
-        let server = run_manager(config, Some(&db));
+        let mut db = database.unwrap();
+        let server = run_manager(config, Some(&mut db));
         // let manager_socket_path = "/tmp/ssm.sock".to_string();
         tokio::spawn(run_web_service(SOCKET_PATH.to_string(), host));
         warn!("Started!!!");

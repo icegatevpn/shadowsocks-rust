@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use crate::config::{Config, ConfigType, ServerInstanceConfig};
 use chrono::{Date, DateTime, NaiveDateTime, TimeZone, Utc};
 use log::debug;
@@ -12,6 +13,7 @@ use std::fmt::Display;
 use std::net::SocketAddr;
 use std::path::Path;
 use std::time::{Duration, SystemTime};
+use shadowsocks::manager::protocol::AddUser;
 
 // Custom serializer/deserializer for DateTime<Utc>
 mod datetime_format {
@@ -42,20 +44,20 @@ mod datetime_format {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ServerConfig {
     #[serde(rename = "server")]
-    ip_address: String,
+    pub ip_address: String,
     #[serde(rename = "server_port")]
-    port: u32,
-    method: String,
-    mode: String,
+    pub port: u32,
+    pub method: String,
+    pub mode: String,
     #[serde(rename = "password")]
-    key: String,
+    pub key: String,
 
     // Database only fields
     #[serde(skip_serializing)]
-    active: bool,
+    pub active: bool,
 
     // #[serde(with = "datetime_format")]
-    created_at: Option<NaiveDateTime>,
+    pub created_at: Option<NaiveDateTime>,
     pub remarks: Option<String>,
     pub timeout: Option<Duration>,
     pub tcp_weight: Option<f32>,
@@ -66,7 +68,7 @@ pub struct ServerConfig {
     pub updated_at: Option<NaiveDateTime>,
 
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    users: Vec<UserConfig>,
+    pub users: Vec<UserConfig>,
 }
 impl ServerConfig {
     pub fn new(addr: ServerAddr, password: String, method: CipherKind) -> Result<Self, RusqliteError> {
@@ -394,22 +396,20 @@ impl Database {
             Ok(None)
         }
     }
-    pub fn load_config_from_tables(&self) -> Result<Config, RusqliteError> {
-        let mut config = Config::new(ConfigType::Server);
-
+    pub fn load_config_from_tables(&self) -> Result<Vec<ServerInstanceConfig>, RusqliteError> {
         // Load servers with their users
         let servers = self.list_servers(true)?;
-
+        let mut ret_servers = Vec::new();
         for server in servers {
             if server.active {
                 // Convert to shadowsocks ServerConfig
                 if let Ok(ss_config) = server.to_shadowsocks_config() {
-                    config.server.push(ServerInstanceConfig::with_server_config(ss_config));
+                    ret_servers.push(ServerInstanceConfig::with_server_config(ss_config));
                 }
             }
         }
 
-        Ok(config)
+        Ok(ret_servers)
     }
 
     pub fn generate_manager_config(&self,
@@ -555,28 +555,122 @@ impl Database {
     //
     //     Ok(())
     // }
+    // Get all users for a specific server port
 
-    // pub fn add_user(&self, name: String, key: String, server_port: u32, active: bool) -> Result<UserConfig, RusqliteError> {
-    //     // First verify the server exists
-    //     if self.get_server(server_port)?.is_none() {
-    //         return Err(RusqliteError::InvalidParameterName("Server port does not exist".into()));
-    //     }
-    //
-    //     let mut stmt = self.conn.prepare(
-    //         "INSERT INTO users (name, key, server_port, active)
-    //          VALUES (?1, ?2, ?3, ?4)",
-    //     )?;
-    //
-    //     stmt.execute(params![name, key, server_port, active])?;
-    //
-    //     Ok(UserConfig {
-    //         id: Some(self.conn.last_insert_rowid()),
-    //         name,
-    //         key,
-    //         server_port,
-    //         active,
-    //     })
-    // }
+    // Add users to a server from an AddUser request
+    pub fn add_or_update_users(&mut self, add_user: &AddUser) -> Result<(), RusqliteError> {
+        // First collect all existing users, using key as the HashMap key
+        let existing_users: HashMap<_, _> = self.get_users_by_server(add_user.server_port as u32)?
+            .into_iter()
+            .map(|user| (user.key.clone(), user))
+            .collect();
+
+        // Now start transaction and perform updates
+        let tx = self.conn.transaction()?;
+
+        for user in &add_user.users {
+            match existing_users.get(&user.password) {
+                Some(_) => {
+                    // Update existing user - note we're matching on key now, not name
+                    tx.execute(
+                        "UPDATE users SET
+                            name = ?1,
+                            active = ?2,
+                            updated_at = CURRENT_TIMESTAMP
+                         WHERE key = ?3 AND server_port = ?4",
+                        params![
+                            user.name,
+                            true,
+                            user.password,
+                            add_user.server_port as u32,
+                        ],
+                    )?;
+                }
+                None => {
+                    // Insert new user
+                    tx.execute(
+                        "INSERT INTO users (
+                            name, key, server_port, active,
+                            created_at, updated_at
+                        ) VALUES (?1, ?2, ?3, ?4, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+                        params![
+                            user.name,
+                            user.password,
+                            add_user.server_port as u32,
+                            true,
+                        ],
+                    )?;
+                }
+            }
+        }
+
+        // Update server's updated_at timestamp
+        tx.execute(
+            "UPDATE servers SET
+                updated_at = CURRENT_TIMESTAMP
+             WHERE port = ?1",
+            params![add_user.server_port as u32],
+        )?;
+
+        tx.commit()?;
+        Ok(())
+    }
+
+    // Helper function to check if a user exists
+    pub fn user_exists(&self, name: &str, server_port: u32) -> Result<bool, RusqliteError> {
+        let count: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM users WHERE name = ?1 AND server_port = ?2",
+            params![name, server_port],
+            |row| row.get(0),
+        )?;
+
+        Ok(count > 0)
+    }
+
+    // Helper function to get user by name and server port
+    pub fn get_user(&self, name: &str, server_port: u32) -> Result<Option<UserConfig>, RusqliteError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, name, key, server_port, active, remarks, created_at, updated_at
+             FROM users
+             WHERE name = ?1 AND server_port = ?2"
+        )?;
+
+        stmt.query_row(
+            params![name, server_port],
+            |row| Ok(UserConfig {
+                id: Some(row.get(0)?),
+                name: row.get(1)?,
+                key: row.get(2)?,
+                server_port: row.get(3)?,
+                active: row.get(4)?,
+                remarks: row.get(5)?,
+                created_at: row.get(6)?,
+                updated_at: row.get(7)?,
+            })
+        ).optional()
+    }
+
+    // Function to update an existing user
+    pub fn update_user(&self, user: &UserConfig) -> Result<(), RusqliteError> {
+        self.conn.execute(
+            "UPDATE users SET
+                key = ?1,
+                active = ?2,
+                remarks = ?3,
+                updated_at = CURRENT_TIMESTAMP
+             WHERE name = ?4 AND server_port = ?5",
+            params![
+                user.key,
+                user.active,
+                user.remarks,
+                user.name,
+                user.server_port,
+            ],
+        )?;
+
+        Ok(())
+    }
+
     pub fn list_servers(&self, active_only: bool) -> Result<Vec<ServerConfig>, RusqliteError> {
         let base_query =
             "SELECT

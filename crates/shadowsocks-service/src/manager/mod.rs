@@ -28,7 +28,8 @@ pub mod server;
 // }
 
 /// Starts a manager server
-pub async fn run(config: Config, database: Option<&Database>) -> io::Result<()> {
+pub async fn run(config: Config, database: Option<&mut Database>) -> io::Result<()> {
+    // todo, access dabase here!!
     // let config = config.unwrap_or(
     //     match dbPath {
     //         None => { return Err(io::Error::new(io::ErrorKind::Other, "no DBPath is provided")) }
@@ -118,7 +119,7 @@ pub async fn run(config: Config, database: Option<&Database>) -> io::Result<()> 
     }
 
     trace!("<< Run Manager...");
-    let rr = manager.run().await;
+    let rr = manager.run(database).await;
     trace!("<< DONE! {:?}", rr);
     rr
 }
