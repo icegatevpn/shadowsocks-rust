@@ -586,16 +586,25 @@ pub fn create(matches: &ArgMatches) -> Result<(Runtime, impl Future<Output = Exi
         // let database = Database::new(Path::new("data/stuff.db"))
         //     .expect("failed to open database");
 
+
+
+
         let host = format!("{}:8080",config.server.first()
             .expect("No server")
             .config.addr()
             .host()
         );
         let abort_signal = monitor::create_signal_monitor();
-        let mut db = database.unwrap();
+        let db = database.unwrap();
+
+        let mut db = Arc::new(Mutex::new(db));
+        // Clone the Arc for the web service
+        let web_db = db.clone();
+
+        // let mut binding = db.lock().await;
         let server = run_manager(config, Some(&mut db));
-        // let manager_socket_path = "/tmp/ssm.sock".to_string();
-        tokio::spawn(run_web_service(SOCKET_PATH.to_string(), host));
+
+        tokio::spawn(run_web_service(SOCKET_PATH.to_string(), host, web_db));
         warn!("Started!!!");
         tokio::pin!(abort_signal);
         tokio::pin!(server);

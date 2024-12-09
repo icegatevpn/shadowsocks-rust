@@ -6,6 +6,7 @@ use std::{io, net::SocketAddr, sync::Arc};
 use std::path::Path;
 use libc::raise;
 use log::{debug, trace};
+use tokio::sync::Mutex;
 use shadowsocks::net::{AcceptOpts, ConnectOpts};
 
 use crate::{
@@ -28,7 +29,7 @@ pub mod server;
 // }
 
 /// Starts a manager server
-pub async fn run(config: Config, database: Option<&mut Database>) -> io::Result<()> {
+pub async fn run(config: Config, database: Option<&mut Arc<Mutex<Database>>>) -> io::Result<()> {
     // todo, access dabase here!!
     // let config = config.unwrap_or(
     //     match dbPath {

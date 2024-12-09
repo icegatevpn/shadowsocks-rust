@@ -204,7 +204,7 @@ impl Manager {
     }
 
     /// Start serving
-    pub async fn run(mut self, mut database: Option<&mut Database>) -> io::Result<()> {
+    pub async fn run(mut self, mut database: Option<&mut Arc<Mutex<Database>>>) -> io::Result<()> {
         let local_addr = self.listener.local_addr()?;
         info!("shadowsocks manager server listening on {}", local_addr);
 
@@ -258,7 +258,8 @@ impl Manager {
                             Ok(_) => {
                                 // Added to config, add to database
                                 if let Some(ref mut db) = database {
-                                    if let Ok(_) = db.add_or_update_users(&req.config) {
+                                    let mut guard = db.lock().await;
+                                    if let Ok(db) = guard.add_or_update_users(&req.config) {
                                         debug!("add user success!");
                                     }
                                 }

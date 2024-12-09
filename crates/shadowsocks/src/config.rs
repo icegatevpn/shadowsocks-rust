@@ -41,7 +41,7 @@ const AEAD2022_PASSWORD_BASE64_ENGINE: base64::engine::GeneralPurpose = base64::
         .with_decode_padding_mode(base64::engine::DecodePaddingMode::Indifferent),
 );
 
-const URL_PASSWORD_BASE64_ENGINE: base64::engine::GeneralPurpose = base64::engine::GeneralPurpose::new(
+pub const URL_PASSWORD_BASE64_ENGINE: base64::engine::GeneralPurpose = base64::engine::GeneralPurpose::new(
     &base64::alphabet::URL_SAFE,
     base64::engine::GeneralPurposeConfig::new()
         .with_encode_padding(false)

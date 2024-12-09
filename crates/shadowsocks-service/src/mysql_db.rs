@@ -1,44 +1,34 @@
-use std::collections::HashMap;
 use crate::config::{Config, ConfigType, ServerInstanceConfig};
 use chrono::{Date, DateTime, NaiveDateTime, TimeZone, Utc};
 use log::debug;
-use rusqlite::{params, types::{FromSql, FromSqlResult, ToSql, ToSqlOutput, ValueRef}, Connection, Error as RusqliteError, OptionalExtension,
-               Statement};
+use rusqlite::{
+    // hooks::{CommitHook, UpdateHook},
+    params,
+    types::{FromSql, FromSqlResult, ToSql, ToSqlOutput, ValueRef},
+    Connection, Error as RusqliteError, OptionalExtension, Statement,
+};
 use serde::{Deserialize, Serialize};
 use shadowsocks::config::{Mode, ServerConfig as SSServerConfig, ServerUser, ServerUserManager, ServerWeight};
 use shadowsocks::crypto::CipherKind;
+use shadowsocks::manager::protocol::AddUser;
 use shadowsocks::plugin::PluginConfig;
 use shadowsocks::ServerAddr;
+use std::collections::HashMap;
 use std::fmt::Display;
 use std::net::SocketAddr;
 use std::path::Path;
 use std::time::{Duration, SystemTime};
-use shadowsocks::manager::protocol::AddUser;
+use rusqlite::hooks::Action;
+use tokio::sync::broadcast;
 
-// Custom serializer/deserializer for DateTime<Utc>
-mod datetime_format {
-    use super::*;
-    use chrono::{DateTime, TimeZone, Utc};
-    use serde::{Deserialize, Deserializer, Serializer};
-
-    pub fn serialize<S>(date: &Option<DateTime<Utc>>, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        match date {
-            Some(dt) => serializer.serialize_i64(dt.timestamp()),
-            None => serializer.serialize_none(),
-        }
-    }
-
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<Option<DateTime<Utc>>, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        Option::<i64>::deserialize(deserializer).map(|opt_ts| {
-            opt_ts.map(|ts| Utc.timestamp_opt(ts, 0).unwrap())
-        })
-    }
+#[derive(Debug, Clone)]
+pub enum DatabaseChange {
+    ServerAdded(u32),
+    ServerRemoved(u32),
+    ServerUpdated(u32),
+    UserAdded(String),
+    UserRemoved(String),
+    UserUpdated(String),
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -56,17 +46,24 @@ pub struct ServerConfig {
     #[serde(skip_serializing)]
     pub active: bool,
 
-    // #[serde(with = "datetime_format")]
+    #[serde(skip_serializing)]
     pub created_at: Option<NaiveDateTime>,
+    #[serde(skip_serializing)]
     pub remarks: Option<String>,
+    #[serde(skip_serializing)]
     pub timeout: Option<Duration>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub tcp_weight: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub udp_weight: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub plugin: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub plugin_opts: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub plugin_args: Option<String>,
+    #[serde(skip_serializing)]
     pub updated_at: Option<NaiveDateTime>,
-
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub users: Vec<UserConfig>,
 }
@@ -106,7 +103,9 @@ impl ServerConfig {
             ServerAddr::DomainName(self.ip_address.clone(), self.port as u16)
         };
 
-        let method = self.method.parse::<CipherKind>()
+        let method = self
+            .method
+            .parse::<CipherKind>()
             .map_err(|e| RusqliteError::InvalidParameterName(format!("Invalid cipher method: {}", e)))?;
 
         let mut ss_config = SSServerConfig::new(addr, self.key.clone(), method)
@@ -135,7 +134,9 @@ impl ServerConfig {
             let plugin_config = PluginConfig {
                 plugin: plugin.clone(),
                 plugin_opts: self.plugin_opts.clone(),
-                plugin_args: self.plugin_args.as_ref()
+                plugin_args: self
+                    .plugin_args
+                    .as_ref()
                     .and_then(|args| serde_json::from_str(args).ok())
                     .unwrap_or_default(),
                 plugin_mode: Mode::TcpOnly,
@@ -154,11 +155,14 @@ impl ServerConfig {
             for user in &self.users {
                 if user.active {
                     match ServerUser::with_encoded_key(user.name.clone(), &user.key) {
-                        Ok(ss_user) => { let _ = user_manager.add_user(ss_user); },
+                        Ok(ss_user) => {
+                            let _ = user_manager.add_user(ss_user);
+                        }
                         Err(e) => {
-                            return Err(RusqliteError::InvalidParameterName(
-                                format!("Failed to create user {}: {}", user.name, e)
-                            ));
+                            return Err(RusqliteError::InvalidParameterName(format!(
+                                "Failed to create user {}: {}",
+                                user.name, e
+                            )));
                         }
                     }
                 }
@@ -170,12 +174,23 @@ impl ServerConfig {
     }
 }
 
+#[derive(Debug, Deserialize)]
+pub struct SsUrlParams {
+    pub server_address: String,
+    pub server_port: u16,
+    pub method: String,
+    pub password: String,
+    #[serde(default)]
+    pub name: Option<String>,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ManagerConfig {
     // manager_tcp_address: Option<String>,
     manager_port: u32,
+    #[serde(rename = "manager_address")]
     manager_sock_address: String,
-    servers: Vec<ServerConfig>
+    servers: Vec<ServerConfig>,
 }
 #[derive(Debug, Serialize, Deserialize)]
 pub struct UserConfig {
@@ -188,14 +203,113 @@ pub struct UserConfig {
     pub server_port: u32,
     #[serde(skip_serializing)]
     pub active: bool,
+    #[serde(skip_serializing)]
     pub remarks: Option<String>,
+    #[serde(skip_serializing)]
     pub created_at: Option<NaiveDateTime>,
+    #[serde(skip_serializing)]
     pub updated_at: Option<NaiveDateTime>,
 }
 
 #[derive(Debug)]
 pub struct Database {
     pub conn: Connection,
+}
+pub struct DatabaseWithHooks {
+    pub conn: Connection,
+    change_tx: broadcast::Sender<DatabaseChange>,
+}
+
+// todo: experimental! If I don't use this, I can remove the 'hooks' feature requirement.
+impl DatabaseWithHooks {
+    pub fn new<P: AsRef<Path>>(path: P) -> Result<(Self, broadcast::Receiver<DatabaseChange>), RusqliteError> {
+        let conn = Connection::open(path)?;
+        let (tx, rx) = broadcast::channel(100); // Buffer size of 100 events
+
+        let tx_clone = tx.clone();
+        let hook = Box::new(move |action: Action, _db: &str, table: &str, row_id: i64| {
+            match (action, table) {
+                (Action::SQLITE_INSERT, "servers") => {
+                    let _ = tx_clone.send(DatabaseChange::ServerAdded(row_id as u32));
+                }
+                (Action::SQLITE_DELETE, "servers") => {
+                    let _ = tx_clone.send(DatabaseChange::ServerRemoved(row_id as u32));
+                }
+                (Action::SQLITE_UPDATE, "servers") => {
+                    let _ = tx_clone.send(DatabaseChange::ServerUpdated(row_id as u32));
+                }
+                (Action::SQLITE_INSERT, "users") | (Action::SQLITE_UPDATE, "users") | (Action::SQLITE_DELETE, "users") => {
+                    // For user operations, we'll just send the row_id since getting the username
+                    // would require database access from within the hook
+                    let _ = tx_clone.send(DatabaseChange::UserUpdated(row_id.to_string()));
+                }
+                _ => {} // Ignore other tables/actions
+            }
+        });
+
+        // Set the update hook
+        conn.update_hook(Some(hook));
+
+        // Optional: Add commit hook for transaction monitoring
+        let commit_hook = Box::new(|| {
+            debug!("Database transaction committed");
+            true // Return true to allow the commit
+        });
+        conn.commit_hook(Some(commit_hook));
+
+        Ok((DatabaseWithHooks { conn, change_tx: tx }, rx))
+    }
+
+    fn get_username_by_rowid(conn: &Connection, row_id: i64) -> Result<String, RusqliteError> {
+        conn.query_row(
+            "SELECT name FROM users WHERE rowid = ?",
+            [row_id],
+            |row| row.get(0)
+        )
+    }
+
+    // Example of how to use the hooks in existing methods
+    pub fn add_server(&self, server: &ServerConfig) -> Result<u32, RusqliteError> {
+        let mut stmt = self.conn.prepare(
+            "INSERT INTO servers (
+                ip_address, port, method, mode, key, active
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        )?;
+
+        stmt.execute(params![
+            server.ip_address,
+            server.port,
+            server.method,
+            server.mode,
+            server.key,
+            server.active,
+        ])?;
+
+        // The update hook will automatically fire and send the DatabaseChange event
+        Ok(server.port)
+    }
+    /*
+    // Example of how to use the hooks in your manager code:
+    pub async fn handle_database_changes(mut rx: broadcast::Receiver<DatabaseChange>) {
+        while let Ok(change) = rx.recv().await {
+            match change {
+                DatabaseChange::ServerAdded(port) => {
+                    debug!("Server added on port {}", port);
+                    // Handle server addition
+                }
+                DatabaseChange::ServerRemoved(port) => {
+                    debug!("Server removed on port {}", port);
+                    // Handle server removal
+                }
+                DatabaseChange::UserAdded(user_id) => {
+                    debug!("User added with id {}", user_id);
+                    // Handle user addition
+                }
+                _ => {} // Handle other changes
+            }
+        }
+    }
+     */
 }
 
 impl Database {
@@ -206,7 +320,6 @@ impl Database {
         let mut db = Database { conn };
         db.init_schema()?;
         Ok(db)
-
     }
 
     pub fn close(self) {
@@ -272,20 +385,14 @@ impl Database {
         )?;
 
         // Create indices for better performance
-        tx.execute(
-            "CREATE INDEX IF NOT EXISTS idx_servers_active ON servers(active)",
-            [],
-        )?;
+        tx.execute("CREATE INDEX IF NOT EXISTS idx_servers_active ON servers(active)", [])?;
 
         tx.execute(
             "CREATE INDEX IF NOT EXISTS idx_users_server_port ON users(server_port)",
             [],
         )?;
 
-        tx.execute(
-            "CREATE INDEX IF NOT EXISTS idx_users_active ON users(active)",
-            [],
-        )?;
+        tx.execute("CREATE INDEX IF NOT EXISTS idx_users_active ON users(active)", [])?;
 
         tx.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_servers_ip_port ON servers(ip_address, port)",
@@ -339,9 +446,9 @@ impl Database {
                         ) VALUES (?1, ?2, ?3, ?4)",
                         params![
                             user.name(),
-                            user.encoded_key(),  // This is the base64 encoded key
-                            port as u32,         // Link to the server
-                            true,                // Active by default
+                            user.encoded_key(), // This is the base64 encoded key
+                            port as u32,        // Link to the server
+                            true,               // Active by default
                         ],
                     )?;
                 }
@@ -363,30 +470,33 @@ impl Database {
                 plugin, plugin_opts, plugin_args,
                 created_at, updated_at
              FROM servers
-             WHERE port = ?1"
+             WHERE port = ?1",
         )?;
 
-        let server = stmt.query_row(params![port], |row| {
-            Ok(ServerConfig {
-                ip_address: row.get(0)?,
-                port: row.get(1)?,
-                method: row.get(2)?,
-                mode: row.get(3)?,
-                key: row.get(4)?,
-                active: row.get(5)?,
-                remarks: row.get(6)?,
-                timeout: row.get::<_, Option<i64>>(7)?
-                    .map(|secs| Duration::from_secs(secs as u64)),
-                tcp_weight: row.get(8)?,
-                udp_weight: row.get(9)?,
-                plugin: row.get(10)?,
-                plugin_opts: row.get(11)?,
-                plugin_args: row.get(12)?,
-                created_at: row.get(13)?,
-                updated_at: row.get(14)?,
-                users: Vec::new(), // We'll populate this next
+        let server = stmt
+            .query_row(params![port], |row| {
+                Ok(ServerConfig {
+                    ip_address: row.get(0)?,
+                    port: row.get(1)?,
+                    method: row.get(2)?,
+                    mode: row.get(3)?,
+                    key: row.get(4)?,
+                    active: row.get(5)?,
+                    remarks: row.get(6)?,
+                    timeout: row
+                        .get::<_, Option<i64>>(7)?
+                        .map(|secs| Duration::from_secs(secs as u64)),
+                    tcp_weight: row.get(8)?,
+                    udp_weight: row.get(9)?,
+                    plugin: row.get(10)?,
+                    plugin_opts: row.get(11)?,
+                    plugin_args: row.get(12)?,
+                    created_at: row.get(13)?,
+                    updated_at: row.get(14)?,
+                    users: Vec::new(), // We'll populate this next
+                })
             })
-        }).optional()?;
+            .optional()?;
 
         if let Some(mut server) = server {
             // Load users for this server
@@ -412,9 +522,10 @@ impl Database {
         Ok(ret_servers)
     }
 
-    pub fn generate_manager_config(&self,
-                                   manager_port: u32,
-                                   manager_sock_address: String
+    pub fn generate_manager_config(
+        &self,
+        manager_port: u32,
+        manager_sock_address: String,
     ) -> Result<ManagerConfig, RusqliteError> {
         let servers = self.list_servers_with_metadata()?;
         let mut config_servers = Vec::new();
@@ -452,6 +563,11 @@ impl Database {
         let config_str = serde_json::to_string_pretty(&config)
             .map_err(|e| RusqliteError::InvalidParameterName(format!("Failed to serialize config: {}", e)))?;
 
+        // pretty print the config!
+        // println!("\n=== Configuration ===");
+        // println!("{}", config_str);
+        // println!("===================\n");
+
         Ok(config_str)
     }
 
@@ -462,47 +578,26 @@ impl Database {
             "SELECT id, name, key, server_port, active, remarks, created_at, updated_at
              FROM users
              WHERE server_port = ?1 AND active = TRUE
-             ORDER BY name"
+             ORDER BY name",
         )?;
 
-        let users = stmt.query_map(params![server_port], |row| {
-            Ok(UserConfig {
-                id: row.get(0)?,
-                name: row.get(1)?,
-                key: row.get(2)?,
-                server_port: row.get(3)?,
-                active: row.get(4)?,
-                remarks: row.get(5)?,
-                created_at: row.get(6)?,
-                updated_at: row.get(7)?,
-            })
-        })?
+        let users = stmt
+            .query_map(params![server_port], |row| {
+                Ok(UserConfig {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    key: row.get(2)?,
+                    server_port: row.get(3)?,
+                    active: row.get(4)?,
+                    remarks: row.get(5)?,
+                    created_at: row.get(6)?,
+                    updated_at: row.get(7)?,
+                })
+            })?
             .collect::<Result<Vec<_>, RusqliteError>>()?;
 
         Ok(users)
     }
-
-
-    // pub fn add_server(&self, server: &ServerConfig) -> Result<u32, RusqliteError> {
-    //     let mut stmt = self.conn.prepare(
-    //         "INSERT INTO servers (
-    //         ip_address, port, method, mode, key, active, created_at)
-    //         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-    //     )?;
-    //     let created_at = Utc::now();
-    //
-    //     stmt.execute(params![
-    //         server.ip_address,
-    //         server.port,
-    //         server.method,
-    //         server.mode,
-    //         server.key,
-    //         server.active,
-    //         created_at.timestamp(),
-    //     ])?;
-    //
-    //     Ok(server.port)
-    // }
 
     // pub fn get_server(&self, port: u32) -> Result<Option<ServerConfig>, RusqliteError> {
     //     let mut stmt = self.conn.prepare(
@@ -560,7 +655,8 @@ impl Database {
     // Add users to a server from an AddUser request
     pub fn add_or_update_users(&mut self, add_user: &AddUser) -> Result<(), RusqliteError> {
         // First collect all existing users, using key as the HashMap key
-        let existing_users: HashMap<_, _> = self.get_users_by_server(add_user.server_port as u32)?
+        let existing_users: HashMap<_, _> = self
+            .get_users_by_server(add_user.server_port as u32)?
             .into_iter()
             .map(|user| (user.key.clone(), user))
             .collect();
@@ -578,12 +674,7 @@ impl Database {
                             active = ?2,
                             updated_at = CURRENT_TIMESTAMP
                          WHERE key = ?3 AND server_port = ?4",
-                        params![
-                            user.name,
-                            true,
-                            user.password,
-                            add_user.server_port as u32,
-                        ],
+                        params![user.name, true, user.password, add_user.server_port as u32,],
                     )?;
                 }
                 None => {
@@ -593,12 +684,7 @@ impl Database {
                             name, key, server_port, active,
                             created_at, updated_at
                         ) VALUES (?1, ?2, ?3, ?4, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
-                        params![
-                            user.name,
-                            user.password,
-                            add_user.server_port as u32,
-                            true,
-                        ],
+                        params![user.name, user.password, add_user.server_port as u32, true,],
                     )?;
                 }
             }
@@ -632,12 +718,11 @@ impl Database {
         let mut stmt = self.conn.prepare(
             "SELECT id, name, key, server_port, active, remarks, created_at, updated_at
              FROM users
-             WHERE name = ?1 AND server_port = ?2"
+             WHERE name = ?1 AND server_port = ?2",
         )?;
 
-        stmt.query_row(
-            params![name, server_port],
-            |row| Ok(UserConfig {
+        stmt.query_row(params![name, server_port], |row| {
+            Ok(UserConfig {
                 id: Some(row.get(0)?),
                 name: row.get(1)?,
                 key: row.get(2)?,
@@ -647,7 +732,83 @@ impl Database {
                 created_at: row.get(6)?,
                 updated_at: row.get(7)?,
             })
-        ).optional()
+        })
+        .optional()
+    }
+    pub fn rename_user(&self, id: i64, new_name: &str) -> Result<(), RusqliteError> {
+        let now = chrono::Utc::now().naive_utc();
+
+        self.conn.execute(
+            "UPDATE users
+             SET name = ?1, updated_at = ?2
+             WHERE id = ?3",
+            params![new_name, now, id],
+        )?;
+
+        Ok(())
+    }
+
+    pub fn remove_user(&mut self, id: i64) -> Result<(), RusqliteError> {
+        self.conn.execute(
+            "UPDATE users
+             SET active = FALSE, updated_at = ?1
+             WHERE id = ?2",
+            params![chrono::Utc::now().naive_utc(), id],
+        )?;
+
+        Ok(())
+    }
+
+    pub fn get_user_by_id(&self, id: i64) -> Result<Option<UserConfig>, RusqliteError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, name, key, server_port, active, remarks, created_at, updated_at
+             FROM users
+             WHERE id = ?1",
+        )?;
+
+        stmt.query_row(params![id], |row| {
+            Ok(UserConfig {
+                id: Some(row.get(0)?),
+                name: row.get(1)?,
+                key: row.get(2)?,
+                server_port: row.get(3)?,
+                active: row.get(4)?,
+                remarks: row.get(5)?,
+                created_at: row.get(6)?,
+                updated_at: row.get(7)?,
+            })
+        })
+            .optional()
+    }
+    pub fn list_users(&self, active_only: bool) -> Result<Vec<UserConfig>, RusqliteError> {
+        let query = if active_only {
+            "SELECT id, name, key, server_port, active, remarks, created_at, updated_at
+             FROM users
+             WHERE active = TRUE
+             ORDER BY id"
+        } else {
+            "SELECT id, name, key, server_port, active, remarks, created_at, updated_at
+             FROM users
+             ORDER BY id"
+        };
+
+        let mut stmt = self.conn.prepare(query)?;
+
+        let users = stmt.query_map([], |row| {
+            Ok(UserConfig {
+                id: Some(row.get(0)?),
+                name: row.get(1)?,
+                key: row.get(2)?,
+                server_port: row.get(3)?,
+                active: row.get(4)?,
+                remarks: row.get(5)?,
+                created_at: row.get(6)?,
+                updated_at: row.get(7)?,
+            })
+        })?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(users)
     }
 
     // Function to update an existing user
@@ -659,21 +820,14 @@ impl Database {
                 remarks = ?3,
                 updated_at = CURRENT_TIMESTAMP
              WHERE name = ?4 AND server_port = ?5",
-            params![
-                user.key,
-                user.active,
-                user.remarks,
-                user.name,
-                user.server_port,
-            ],
+            params![user.key, user.active, user.remarks, user.name, user.server_port,],
         )?;
 
         Ok(())
     }
 
     pub fn list_servers(&self, active_only: bool) -> Result<Vec<ServerConfig>, RusqliteError> {
-        let base_query =
-            "SELECT
+        let base_query = "SELECT
                 ip_address, port, method, mode, key, active,
                 remarks, timeout_seconds, tcp_weight, udp_weight,
                 plugin, plugin_opts, plugin_args,
@@ -698,7 +852,8 @@ impl Database {
                     key: row.get(4)?,
                     active: row.get(5)?,
                     remarks: row.get(6)?,
-                    timeout: row.get::<_, Option<i64>>(7)?
+                    timeout: row
+                        .get::<_, Option<i64>>(7)?
                         .map(|secs| Duration::from_secs(secs as u64)),
                     tcp_weight: row.get(8)?,
                     udp_weight: row.get(9)?,
@@ -724,8 +879,7 @@ impl Database {
 
     // Companion method that includes extra metadata without loading users
     pub fn list_servers_with_metadata(&self) -> Result<Vec<ServerConfig>, RusqliteError> {
-        let query =
-            "SELECT
+        let query = "SELECT
                 s.ip_address, s.port, s.method, s.mode, s.key, s.active,
                 s.remarks, s.timeout_seconds, s.tcp_weight, s.udp_weight,
                 s.plugin, s.plugin_opts, s.plugin_args,
@@ -748,7 +902,8 @@ impl Database {
                     key: row.get(4)?,
                     active: row.get(5)?,
                     remarks: row.get(6)?,
-                    timeout: row.get::<_, Option<i64>>(7)?
+                    timeout: row
+                        .get::<_, Option<i64>>(7)?
                         .map(|secs| Duration::from_secs(secs as u64)),
                     tcp_weight: row.get(8)?,
                     udp_weight: row.get(9)?,
@@ -765,6 +920,84 @@ impl Database {
         Ok(servers)
     }
 
+    pub fn add_user(
+        &mut self,
+        name: String,
+        key: String,
+        server_port: u32,
+        active: bool,
+    ) -> Result<UserConfig, rusqlite::Error> {
+        // Start a transaction so we can rollback if anything fails
+        let tx = self.conn.transaction()?;
+
+        // First verify the server exists and is active
+        let server_exists: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM servers WHERE port = ? AND active = TRUE)",
+            params![server_port],
+            |row| row.get(0),
+        )?;
+
+        if !server_exists {
+            return Err(rusqlite::Error::InvalidParameterName(
+                "Server port does not exist or is not active".into(),
+            ));
+        }
+
+        // Verify name and port combination is unique
+        let name_exists: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM users WHERE name = ? AND server_port = ?)",
+            params![name, server_port],
+            |row| row.get(0),
+        )?;
+
+        if name_exists {
+            return Err(rusqlite::Error::InvalidParameterName(
+                "User name already exists for this server".into(),
+            ));
+        }
+
+        // Get current timestamp
+        let now = chrono::Utc::now().naive_utc();
+
+        // Insert the new user
+        tx.execute(
+            "INSERT INTO users (
+                name,
+                key,
+                server_port,
+                active,
+                created_at,
+                updated_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                name,
+                key,
+                server_port,
+                active,
+                now,
+                now,
+            ],
+        )?;
+
+        // Get the inserted user's ID
+        let id = tx.last_insert_rowid();
+
+        // Commit the transaction
+        tx.commit()?;
+
+        // Return the created user config
+        Ok(UserConfig {
+            id: Some(id),
+            name,
+            key,
+            server_port,
+            active,
+            remarks: None,
+            created_at: Some(now),
+            updated_at: Some(now),
+        })
+    }
+
     pub fn get_users_by_server(&self, server_port: u32) -> Result<Vec<UserConfig>, RusqliteError> {
         let mut stmt = self.conn.prepare(
             "SELECT
@@ -772,7 +1005,7 @@ impl Database {
                 created_at, updated_at
              FROM users
              WHERE server_port = ?1
-             ORDER BY name"
+             ORDER BY name",
         )?;
 
         let users = stmt
@@ -791,6 +1024,54 @@ impl Database {
             .collect::<Result<Vec<_>, RusqliteError>>()?;
 
         Ok(users)
+    }
+
+    pub fn build_ssurl_params_from_user_id(
+        // conn: &Connection,
+        &self,
+        user_id: i64,
+        default_server_address: &str,
+    ) -> Result<SsUrlParams, RusqliteError> {
+        // First get the user details
+        let mut stmt = self.conn.prepare(
+            "SELECT name, key, server_port
+         FROM users
+         WHERE id = ? AND active = TRUE"
+        )?;
+
+        let user = stmt.query_row([user_id], |row| {
+            Ok((
+                row.get::<_, String>(0)?, // name
+                row.get::<_, String>(1)?, // key/password
+                row.get::<_, u32>(2)?,    // server_port
+            ))
+        })?;
+
+        let (user_name, password, server_port) = user;
+
+        // Then get the server details for this port
+        let mut stmt = self.conn.prepare(
+            "SELECT method, mode
+         FROM servers
+         WHERE port = ? AND active = TRUE"
+        )?;
+
+        let server = stmt.query_row([server_port], |row| {
+            Ok((
+                row.get::<_, String>(0)?, // method
+                row.get::<_, String>(1)?, // mode
+            ))
+        })?;
+
+        let (method, _mode) = server;
+
+        Ok(SsUrlParams {
+            server_address: default_server_address.to_string(),
+            server_port: server_port as u16,
+            method,
+            password,
+            name: Some(user_name),
+        })
     }
 
 }
