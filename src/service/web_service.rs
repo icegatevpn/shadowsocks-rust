@@ -1,6 +1,6 @@
 use crate::service::domain_connection::connect_domain_socket;
 use crate::service::key_generator::generate_key;
-use async_channel::{unbounded, Receiver, RecvError, SendError, Sender};
+use async_channel::{unbounded, Receiver, Sender};
 use axum::{
     extract::State,
     http::StatusCode,
@@ -8,30 +8,18 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use axum::extract::{Path as AxPath, Query};
-use futures::{SinkExt, TryStreamExt};
+use axum::extract::{Path as AxPath, Path};
 use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
-use serde_json::{Result, Value};
 use shadowsocks::manager::protocol::AddUser;
 use shadowsocks_service::shadowsocks;
-use shadowsocks_service::shadowsocks::manager::protocol::{ServerConfigOther, ServerUserConfig};
-use shadowsocks_service::shadowsocks::ServerConfig;
-use std::future::Future;
-use std::io::{Error, Read, Write};
-use std::os::unix::net::UnixStream;
-use std::path::Path;
-use std::str::Bytes;
 use std::{collections::HashMap, fmt, sync::Arc};
-use tokio::time::error::Elapsed;
-use tokio::time::sleep;
+use axum::routing::{delete, put};
 use tokio::{
-    net::UnixDatagram,
-    sync::{mpsc, oneshot, Mutex},
+    sync::{oneshot, Mutex},
     time::{timeout, Duration},
 };
-use uuid::Uuid;
-use shadowsocks_service::mysql_db::{Database, SsUrlParams};
+use shadowsocks_service::mysql_db::{Database};
 use shadowsocks_service::url_generator::generate_ssurl;
 
 #[derive(Debug, Deserialize)]
@@ -46,17 +34,18 @@ struct ApiResponse {
     data: Option<String>,
 }
 
-const MAX_RESPONSE_SIZE: usize = 4096;
-const COMMAND_TIMEOUT_SECS: u64 = 5;
-
-const MAX_RETRIES: u8 = 3;
-const RETRY_DELAY_MS: u64 = 500;
-
-// Structure to track pending requests
-struct PendingRequest {
-    response_sender: oneshot::Sender<String>,
-    command_id: String,
+#[derive(Debug, Deserialize)]
+struct RenameRequest {
+    name: String,
 }
+
+// todo: maybe future usage
+// #[derive(Debug, Serialize)]
+// struct Metrics {
+//     bytes_transferred_by_user_id: HashMap<String, i64>,
+// }
+
+const COMMAND_TIMEOUT_SECS: u64 = 5;
 
 #[derive(Debug, Deserialize)]
 struct GenerateKeyRequest {
@@ -74,7 +63,7 @@ struct AppState {
 
 async fn socket_listener(
     socket_path: String,
-    mut command_rx: Receiver<(String, String)>,
+    command_rx: Receiver<(String, String)>,
     pending_requests: Arc<Mutex<HashMap<String, oneshot::Sender<String>>>>,
 ) {
     let mut from_socket: Option<Receiver<String>> = None;
@@ -131,7 +120,9 @@ async fn socket_listener(
 
 async fn handle_command(State(state): State<AppState>, Json(payload): Json<ManagerCommand>) -> impl IntoResponse {
     let (response_tx, response_rx) = oneshot::channel();
-    let command_id = "ONE".to_string(); //Uuid::new_v4().to_string();
+    // This is just a placeholder for a possible uuid to send to the socket and
+    // monitor for the return uuid. That would require additional work on the socket
+    let command_id = "ONE".to_string();
 
     // Store the response channel
     {
@@ -212,6 +203,7 @@ async fn send_command(state: &AppState, command: String, timeout_secs: u64) -> (
         Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "Failed to send command".to_string()),
     }
 }
+#[allow(dead_code)]
 async fn cmd_custom(State(state): State<AppState>, command: String) -> impl IntoResponse {
     send_command(&state, command, COMMAND_TIMEOUT_SECS).await
 }
@@ -266,7 +258,56 @@ pub async fn run_web_service(manager_socket_path: String, host_name: String, db:
         db
     };
 
+    async fn get_access_key(
+        State(state): State<AppState>,
+        Path(id): Path<String>,
+    ) -> impl IntoResponse {
+        let db = state.db.lock().await;
+        let user_and_url = db.list_users_with_url(true, Some(id.parse().unwrap()))
+            .map_err(|e| ApiError::DatabaseError(e.to_string())).expect("Failed to list users");
 
+        let (user, (method, url)) = user_and_url.first().unwrap();
+
+        (StatusCode::OK, Json(AccessKey {
+            id: Some(user.id.unwrap_or(0).to_string()),
+            name: Some(user.name.clone()),
+            password: Some(user.key.clone()),
+            port: Some(user.server_port),
+            method: Some(method.clone()),
+            access_url: url.clone(),
+        }))
+    }
+
+    async fn remove_access_key(
+        State(state): State<AppState>,
+        Path(id): Path<String>,
+    ) -> impl IntoResponse {
+        let mut db = state.db.lock().await;
+        let num_users = db.remove_user(id.parse().unwrap()).expect("Failed to remove user");
+        (StatusCode::OK, num_users)
+    }
+
+    // todo: maybe future usage
+    // async fn get_metrics(
+    //     State(_): State<AppState>,
+    // ) -> impl IntoResponse {
+    //     // This would need to be implemented to track actual bytes transferred
+    //     let metrics = Metrics {
+    //         bytes_transferred_by_user_id: HashMap::new(),
+    //     };
+    //
+    //     (StatusCode::OK, Json(metrics))
+    // }
+
+    async fn rename_access_key(
+        State(state): State<AppState>,
+        Path(id): Path<String>,
+        Json(req): Json<RenameRequest>,
+    ) -> impl IntoResponse {
+        let db = state.db.lock().await;
+        let num_removed = db.rename_user(id.parse().unwrap(), &req.name).expect("Failed to rename key");
+        (StatusCode::OK,format!("Renamed keys: {:?}", num_removed))
+    }
 
     // Create router
     let app = Router::new()
@@ -283,9 +324,9 @@ pub async fn run_web_service(manager_socket_path: String, host_name: String, db:
         // Add new REST API endpoints
         .route("/access-keys", get(list_access_keys))
         .route("/access-keys", post(create_access_key))
-        // .route("/access-keys/:id", get(get_access_key))
-        // .route("/access-keys/:id", delete(remove_access_key))
-        // .route("/access-keys/:id/name", put(rename_access_key))
+        .route("/access-keys/:id", get(get_access_key))
+        .route("/access-keys/:id", delete(remove_access_key))
+        .route("/access-keys/:id/name", put(rename_access_key))
         // .route("/metrics/transfer", get(get_metrics))
         .with_state(state);
 
@@ -300,6 +341,7 @@ pub async fn run_web_service(manager_socket_path: String, host_name: String, db:
 // Add new REST API types
 // Error handling
 #[derive(Debug)]
+#[allow(dead_code)]
 pub enum ApiError {
     // Socket/connection related errors
     SocketConnectionFailed(std::io::Error),
@@ -380,6 +422,7 @@ impl IntoResponse for ApiError {
 }
 // Helper trait for converting other error types to ApiError
 pub trait IntoApiError {
+    #[allow(dead_code)]
     fn into_api_error(self) -> ApiError;
 }
 // Implementation for std::io::Error
@@ -402,7 +445,7 @@ impl IntoApiError for &str {
 }
 #[derive(Debug, Serialize)]
 struct AccessKeyListResponse {
-    access_keys: Vec<(AccessKey)>,
+    access_keys: Vec<AccessKey>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -426,8 +469,7 @@ async fn create_access_key(
     let password = generate_key(DEFAULT_CIPHER_METHOD).expect("Failed to generate key");
     let servers = db.list_servers(true).expect("Failed to list servers");
     let server = servers
-        .first().expect("No server found")
-        .clone();
+        .first().expect("No server found");
 
     // Create new user
     let (user, url) = db.add_user(
@@ -450,7 +492,7 @@ async fn list_access_keys(State(state): State<AppState>) -> impl IntoResponse {/
     debug!("List access keys....");
     let db = state.db.lock().await;
 
-    let users = db.list_users_with_url(true)
+    let users = db.list_users_with_url(true, None)
         .map_err(|e| ApiError::DatabaseError(e.to_string())).expect("Failed to list users");
 
     let access_keys = users.into_iter()
@@ -503,7 +545,6 @@ async fn generate_ssurl_handler(
                 }),
             ),
         }
-        // generate_ssurl_handler2(params)
     } else {
         (
             StatusCode::BAD_REQUEST,
@@ -578,5 +619,3 @@ async fn generate_cipher_key_post(Json(payload): Json<GenerateKeyRequest>,) -> i
         ),
     }
 }
-
-

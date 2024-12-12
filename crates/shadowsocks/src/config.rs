@@ -14,7 +14,6 @@ use std::{
     time::Duration,
 };
 
-use base64::Engine as _;
 use byte_string::ByteStr;
 use bytes::Bytes;
 use cfg_if::cfg_if;
@@ -351,7 +350,6 @@ impl ServerUserManager {
 
     pub fn user_manager_with_users(config: &Vec<ServerUserConfig>) -> io::Result<ServerUserManager> {
         let mut user_manager = ServerUserManager::new();
-        // if let Some(ref users) = config.users {
         for user in config.iter() {
             let user = match ServerUser::with_encoded_key(&user.name, &user.password) {
                 Ok(u) => u,
@@ -370,7 +368,6 @@ impl ServerUserManager {
 
             user_manager.add_user(user);
         }
-        // }
         Ok(user_manager)
     }
 

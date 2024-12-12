@@ -299,7 +299,7 @@ pub fn create(matches: &ArgMatches) -> Result<(Runtime, impl Future<Output = Exi
             Some(ref config_path) => match ServiceConfig::load_from_file(config_path) {
                 Ok(c) => c,
                 Err(err) => {
-                    eprintln!("loading config b {config_path:?}, {err}");
+                    eprintln!("loading config {config_path:?}, {err}");
                     return Err(crate::EXIT_CODE_LOAD_CONFIG_FAILURE.into());
                 }
             },
@@ -323,7 +323,7 @@ pub fn create(matches: &ArgMatches) -> Result<(Runtime, impl Future<Output = Exi
             Some(cpath) => match Config::load_from_file(&cpath, ConfigType::Server) {
                 Ok(cfg) => cfg,
                 Err(err) => {
-                    eprintln!("loading config a {cpath:?}, {err}");
+                    eprintln!("loading config {cpath:?}, {err}");
                     return Err(crate::EXIT_CODE_LOAD_CONFIG_FAILURE.into());
                 }
             },

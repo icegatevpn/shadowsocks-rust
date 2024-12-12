@@ -1,7 +1,6 @@
 //! Server Manager launchers
 
 use std::{future::Future, net::IpAddr, path::PathBuf, process::ExitCode, time::Duration};
-use std::path::Path;
 use std::sync::Arc;
 use clap::{builder::PossibleValuesParser, Arg, ArgAction, ArgGroup, ArgMatches, Command, ValueHint};
 use futures::future::{self, Either};
@@ -11,8 +10,6 @@ use tokio::{
     runtime::{Builder, Runtime},
 };
 use tokio::sync::Mutex;
-use tracing::debug;
-use tracing::field::debug;
 #[cfg(unix)]
 use shadowsocks_service::config::ManagerServerMode;
 use shadowsocks_service::{
@@ -285,10 +282,7 @@ static SOCKET_PATH: &str =  "/tmp/ssm.sock";
 
 /// Create `Runtime` and `main` entry
 pub fn create(matches: &ArgMatches) -> Result<(Runtime, impl Future<Output = ExitCode>), ExitCode> {
-
-
-    let (config, runtime, mut database) = {
-
+    let (config, runtime, database) = {
         let config_path_opt = matches.get_one::<PathBuf>("CONFIG").cloned().or_else(|| {
             if !matches.contains_id("SERVER_CONFIG") {
                 match crate::config::get_default_config_path("manager.json") {
@@ -582,9 +576,6 @@ pub fn create(matches: &ArgMatches) -> Result<(Runtime, impl Future<Output = Exi
     };
 
     let main_fut = async move {
-        // Reads the public Ip address from the first server address in the config.
-        // let database = Database::new(Path::new("data/stuff.db"))
-        //     .expect("failed to open database");
 
         let host = format!("{}:8080",config.server.first()
             .expect("No server")

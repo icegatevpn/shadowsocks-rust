@@ -1,5 +1,4 @@
 use base64::Engine;
-use serde::{Deserialize, Serialize};
 use std::fmt::Write;
 use shadowsocks::config::URL_PASSWORD_BASE64_ENGINE;
 use shadowsocks::{ServerAddr, ServerConfig};

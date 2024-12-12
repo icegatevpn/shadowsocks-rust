@@ -7,7 +7,7 @@ use std::{
     string::ToString,
 };
 use std::fmt::{Display, Formatter};
-use log::{debug, error};
+use log::error;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use bytes::BufMut;

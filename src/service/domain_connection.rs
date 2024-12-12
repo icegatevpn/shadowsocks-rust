@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::{PathBuf};
 use tokio::net::UnixDatagram;
 use async_channel::Receiver;
 use log::debug;

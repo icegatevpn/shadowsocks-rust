@@ -72,9 +72,9 @@ pub mod server;
 mod sys;
 mod utils;
 pub mod mysql_db;
-mod tokio_mysql_db;
+// mod tokio_mysql_db;
 pub mod url_generator;
-// Not sure if we relly need or want the database monitor, but I'm holding onto this for now this.
+// Not sure if we relly need or want the database monitor, but I'm holding onto this for now.
 // mod database_monitor;
 
 /// Default UDP association's expire duration

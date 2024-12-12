@@ -23,8 +23,7 @@ use shadowsocks::{
 };
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::{sync::Mutex, task::JoinHandle, time};
-use shadowsocks::manager::error::Error;
-use shadowsocks::manager::protocol::{AddUser, AddUserRequest, AddUserResponse, RemoveUserRequest, RemoveUserResponse, ServerConfigOther};
+use shadowsocks::manager::protocol::{AddUserRequest, AddUserResponse, RemoveUserRequest, RemoveUserResponse};
 use crate::{
     acl::AccessControl,
     config::{ManagerConfig, ManagerServerHost, ManagerServerMode, SecurityConfig},
@@ -240,7 +239,6 @@ impl Manager {
                 }
                 ManagerRequest::List(..) => {
                     let rsp = self.handle_list().await;
-                    // let _ = self.listener.send_to(&rsp, &peer_addr).await;
                     match self.listener.send_to(&rsp, &peer_addr).await {
                         Ok(_) => {}
                         Err(e) => {
@@ -259,7 +257,7 @@ impl Manager {
                                 // Added to config, add to database
                                 if let Some(ref mut db) = database {
                                     let mut guard = db.lock().await;
-                                    if let Ok(db) = guard.add_or_update_users(&req.config) {
+                                    if let Ok(_) = guard.add_or_update_users(&req.config) {
                                         debug!("add user success!");
                                     }
                                 }
@@ -569,30 +567,30 @@ impl Manager {
         );
     }
 
-    async fn get_tcp_user_manager_sender(&self, port:u16)-> Option<UnboundedSender<ServerUserManager>> {
-        let mut found :Option<UnboundedSender<ServerUserManager>> = None;
-        let servers = self.servers.lock().await;
-        for (_, server) in servers.iter() {
-            let same = server.svr_cfg.addr().port() == port;
-            if same {
-                found =  server.tcp_user_manager_sender.clone();
-            }
-            break;
-        }
-        found
-    }
-    async fn get_udp_user_manager_sender(&self, port:u16)-> Option<UnboundedSender<ServerUserManager>> {
-        let mut found :Option<UnboundedSender<ServerUserManager>> = None;
-        let servers = self.servers.lock().await;
-        for (_, server) in servers.iter() {
-            let same = server.svr_cfg.addr().port() == port;
-            if same {
-                found =  server.udp_user_manager_sender.clone();
-            }
-            break;
-        }
-        found
-    }
+    // async fn get_tcp_user_manager_sender(&self, port:u16)-> Option<UnboundedSender<ServerUserManager>> {
+    //     let mut found :Option<UnboundedSender<ServerUserManager>> = None;
+    //     let servers = self.servers.lock().await;
+    //     for (_, server) in servers.iter() {
+    //         let same = server.svr_cfg.addr().port() == port;
+    //         if same {
+    //             found =  server.tcp_user_manager_sender.clone();
+    //         }
+    //         break;
+    //     }
+    //     found
+    // }
+    // async fn get_udp_user_manager_sender(&self, port:u16)-> Option<UnboundedSender<ServerUserManager>> {
+    //     let mut found :Option<UnboundedSender<ServerUserManager>> = None;
+    //     let servers = self.servers.lock().await;
+    //     for (_, server) in servers.iter() {
+    //         let same = server.svr_cfg.addr().port() == port;
+    //         if same {
+    //             found =  server.udp_user_manager_sender.clone();
+    //         }
+    //         break;
+    //     }
+    //     found
+    // }
 
     async fn get_config(&self, port: u16) -> Option<ServerConfig> {
         let mut found :Option<ServerConfig> = None;
@@ -734,6 +732,7 @@ impl Manager {
         };
 
         svr_cfg.set_mode(mode.unwrap_or(self.svr_cfg.mode));
+
         match ServerUserManager::user_manager_with_users(req.users.as_ref().expect("missing users")) {
             Ok(manager) => {
                 svr_cfg.set_user_manager(manager);

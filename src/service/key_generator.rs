@@ -4,6 +4,7 @@ use rand::{rngs::OsRng, RngCore};
 use shadowsocks_service::shadowsocks::crypto::CipherKind;
 
 #[derive(Debug)]
+#[allow(dead_code)]
 pub enum KeyGenError {
     InvalidMethod(String),
     KeyGenerationFailed
@@ -46,10 +47,6 @@ mod tests {
         // Test valid method
         let key = generate_key("aes-128-gcm").unwrap();
         assert!(!key.is_empty());
-
-        // // Test that key length is correct
-        // let decoded = BASE64.decode(key).unwrap();
-        // assert_eq!(decoded.len(), CipherKind::Aes128Gcm.key_len());
 
         // Test invalid method
         assert!(generate_key("invalid-method").is_err());

@@ -14,3 +14,4 @@
 /.devcontainer
 .DS_Store
 Cargo.lock
+/stuff/stuff.db

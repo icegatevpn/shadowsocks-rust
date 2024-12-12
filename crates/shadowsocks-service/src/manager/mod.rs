@@ -3,9 +3,7 @@
 //! Service for managing multiple relay servers. [Manage Multiple Users](https://github.com/shadowsocks/shadowsocks/wiki/Manage-Multiple-Users)
 
 use std::{io, net::SocketAddr, sync::Arc};
-use std::path::Path;
-use libc::raise;
-use log::{debug, trace};
+use log::trace;
 use tokio::sync::Mutex;
 use shadowsocks::net::{AcceptOpts, ConnectOpts};
 
@@ -14,35 +12,14 @@ use crate::{
     dns::build_dns_resolver,
     server::SERVER_DEFAULT_KEEPALIVE_TIMEOUT,
 };
-use crate::config::Error;
 use crate::mysql_db::Database;
 
 pub use self::server::{Manager, ManagerBuilder};
 
 pub mod server;
 
-// pub async fn run(dbPath: &Path) -> io::Result<()> {
-//     let database = Database::new("data/stuff.db")
-//         .expect("failed to open database");
-//     let config: Config = database.get_config();
-//     run(config)
-// }
-
 /// Starts a manager server
 pub async fn run(config: Config, database: Option<&mut Arc<Mutex<Database>>>) -> io::Result<()> {
-    // todo, access dabase here!!
-    // let config = config.unwrap_or(
-    //     match dbPath {
-    //         None => { return Err(io::Error::new(io::ErrorKind::Other, "no DBPath is provided")) }
-    //         Some(path) => {
-    //             let database = Database::new(path)
-    //                 .expect("failed to open database");
-    //             debug!("Database connection opened: {:?}", database.conn);
-    //             let config: Config = database.get_config();
-    //         }
-    //     }
-    // );
-
     assert_eq!(config.config_type, ConfigType::Manager);
 
     trace!("{:?}", config);
@@ -119,8 +96,8 @@ pub async fn run(config: Config, database: Option<&mut Arc<Mutex<Database>>>) ->
         manager.add_server(svr_inst.config).await;
     }
 
-    trace!("<< Run Manager...");
+    trace!("Run Manager...");
     let rr = manager.run(database).await;
-    trace!("<< DONE! {:?}", rr);
+    trace!("DONE! {:?}", rr);
     rr
 }
