@@ -586,9 +586,6 @@ pub fn create(matches: &ArgMatches) -> Result<(Runtime, impl Future<Output = Exi
         // let database = Database::new(Path::new("data/stuff.db"))
         //     .expect("failed to open database");
 
-
-
-
         let host = format!("{}:8080",config.server.first()
             .expect("No server")
             .config.addr()

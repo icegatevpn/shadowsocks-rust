@@ -1,12 +1,8 @@
 use crate::config::{Config, ConfigType, ServerInstanceConfig};
 use chrono::{Date, DateTime, NaiveDateTime, TimeZone, Utc};
-use log::debug;
-use rusqlite::{
-    // hooks::{CommitHook, UpdateHook},
-    params,
-    types::{FromSql, FromSqlResult, ToSql, ToSqlOutput, ValueRef},
-    Connection, Error as RusqliteError, OptionalExtension, Statement,
-};
+use log::{debug, error};
+use rusqlite::{params, types::{FromSql, FromSqlResult, ToSql, ToSqlOutput, ValueRef}, Connection, Error as RusqliteError, Error, OptionalExtension, Row, Statement};
+// use shadowsocks::url_generator::generate_ssurl;
 use serde::{Deserialize, Serialize};
 use shadowsocks::config::{Mode, ServerConfig as SSServerConfig, ServerUser, ServerUserManager, ServerWeight};
 use shadowsocks::crypto::CipherKind;
@@ -18,8 +14,11 @@ use std::fmt::Display;
 use std::net::SocketAddr;
 use std::path::Path;
 use std::time::{Duration, SystemTime};
+use axum::Json;
+use http::StatusCode;
 use rusqlite::hooks::Action;
 use tokio::sync::broadcast;
+use crate::url_generator::{generate_ssurl, SsUrlError};
 
 #[derive(Debug, Clone)]
 pub enum DatabaseChange {
@@ -36,7 +35,7 @@ pub struct ServerConfig {
     #[serde(rename = "server")]
     pub ip_address: String,
     #[serde(rename = "server_port")]
-    pub port: u32,
+    pub port: u16,
     pub method: String,
     pub mode: String,
     #[serde(rename = "password")]
@@ -70,8 +69,8 @@ pub struct ServerConfig {
 impl ServerConfig {
     pub fn new(addr: ServerAddr, password: String, method: CipherKind) -> Result<Self, RusqliteError> {
         let (ip_address, port) = match addr {
-            ServerAddr::SocketAddr(sock_addr) => (sock_addr.ip().to_string(), sock_addr.port() as u32),
-            ServerAddr::DomainName(domain, port) => (domain, port as u32),
+            ServerAddr::SocketAddr(sock_addr) => (sock_addr.ip().to_string(), sock_addr.port()),
+            ServerAddr::DomainName(domain, port) => (domain, port),
         };
 
         Ok(ServerConfig {
@@ -187,7 +186,7 @@ pub struct SsUrlParams {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ManagerConfig {
     // manager_tcp_address: Option<String>,
-    manager_port: u32,
+    manager_port: u16,
     #[serde(rename = "manager_address")]
     manager_sock_address: String,
     servers: Vec<ServerConfig>,
@@ -200,7 +199,7 @@ pub struct UserConfig {
     #[serde(rename = "password")]
     pub key: String,
     #[serde(skip_serializing)]
-    pub server_port: u32,
+    pub server_port: u16,
     #[serde(skip_serializing)]
     pub active: bool,
     #[serde(skip_serializing)]
@@ -269,7 +268,7 @@ impl DatabaseWithHooks {
     }
 
     // Example of how to use the hooks in existing methods
-    pub fn add_server(&self, server: &ServerConfig) -> Result<u32, RusqliteError> {
+    pub fn add_server(&self, server: &ServerConfig) -> Result<u16, RusqliteError> {
         let mut stmt = self.conn.prepare(
             "INSERT INTO servers (
                 ip_address, port, method, mode, key, active
@@ -429,7 +428,7 @@ impl Database {
                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                 params![
                     ip_address,
-                    port as u32,
+                    port,
                     server.method().to_string(),
                     server.mode().to_string(),
                     server.password().to_string(),
@@ -447,7 +446,7 @@ impl Database {
                         params![
                             user.name(),
                             user.encoded_key(), // This is the base64 encoded key
-                            port as u32,        // Link to the server
+                            port,        // Link to the server
                             true,               // Active by default
                         ],
                     )?;
@@ -462,7 +461,7 @@ impl Database {
         Ok(())
     }
 
-    pub fn load_server_config(&self, port: u32) -> Result<Option<ServerConfig>, RusqliteError> {
+    pub fn load_server_config(&self, port: u16) -> Result<Option<ServerConfig>, RusqliteError> {
         let mut stmt = self.conn.prepare(
             "SELECT
                 ip_address, port, method, mode, key, active,
@@ -524,7 +523,7 @@ impl Database {
 
     pub fn generate_manager_config(
         &self,
-        manager_port: u32,
+        manager_port: u16,
         manager_sock_address: String,
     ) -> Result<ManagerConfig, RusqliteError> {
         let servers = self.list_servers_with_metadata()?;
@@ -548,7 +547,7 @@ impl Database {
         })
     }
 
-    pub fn get_config(&self, manager_port: u32, sock_path: String) -> Result<String, RusqliteError> {
+    pub fn get_config(&self, manager_port: u16, sock_path: String) -> Result<String, RusqliteError> {
         // Get all active servers with their users
         let servers = self.list_servers(true)?; // Only get active servers
 
@@ -564,16 +563,16 @@ impl Database {
             .map_err(|e| RusqliteError::InvalidParameterName(format!("Failed to serialize config: {}", e)))?;
 
         // pretty print the config!
-        // println!("\n=== Configuration ===");
-        // println!("{}", config_str);
-        // println!("===================\n");
+        println!("\n=== Configuration ===");
+        println!("{}", config_str);
+        println!("===================\n");
 
         Ok(config_str)
     }
 
     // todo not sure I need this
     // Helper method to get server users in the format needed for the config
-    fn get_formatted_users(&self, server_port: u32) -> Result<Vec<UserConfig>, RusqliteError> {
+    fn get_formatted_users(&self, server_port: u16) -> Result<Vec<UserConfig>, RusqliteError> {
         let mut stmt = self.conn.prepare(
             "SELECT id, name, key, server_port, active, remarks, created_at, updated_at
              FROM users
@@ -599,32 +598,44 @@ impl Database {
         Ok(users)
     }
 
-    // pub fn get_server(&self, port: u32) -> Result<Option<ServerConfig>, RusqliteError> {
-    //     let mut stmt = self.conn.prepare(
-    //         "SELECT ip_address, port, method, mode, key, active, created_at
-    //          FROM servers
-    //          WHERE port = ?1",
-    //     )?;
-    //
-    //     let server = stmt
-    //         .query_row(params![port], |row| {
-    //             let timestamp: i64 = row.get(6)?;
-    //             Ok(ServerConfig {
-    //                 ip_address: row.get(0)?,
-    //                 port: row.get(1)?,
-    //                 method: row.get(2)?,
-    //                 mode: row.get(3)?,
-    //                 key: row.get(4)?,
-    //                 active: row.get(5)?,
-    //                 // created_at: row.get(6)?,
-    //                 created_at: Some(Utc.timestamp_opt(timestamp, 0).unwrap()),
-    //                 users: Vec::new()
-    //             })
-    //         })
-    //         .optional()?;
-    //
-    //     Ok(server)
-    // }
+    pub fn get_server(&self, port: u16) -> Result<Option<ServerConfig>, RusqliteError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT ip_address, port, method, mode, key, active, created_at,
+             remarks, timeout_seconds, tcp_weight, udp_weight
+             FROM servers
+             WHERE port = ?1",
+        )?;
+
+        let server = stmt
+            .query_row(params![port], |row| {
+                // let timestamp: i64 = row.get(6)?;
+                Ok(ServerConfig {
+                    ip_address: row.get(0)?,
+                    port: row.get(1)?,
+                    method: row.get(2)?,
+                    mode: row.get(3)?,
+                    key: row.get(4)?,
+                    active: row.get(5)?,
+                    created_at: row.get(6)?,
+                    // created_at: Some(Utc.timestamp_opt(timestamp, 0).unwrap()),
+                    remarks: row.get(7)?,
+                    timeout: row
+                        .get::<_, Option<i64>>(8)?
+                        .map(|secs| Duration::from_secs(secs as u64)),
+                    tcp_weight: row.get(9)?,
+                    udp_weight: row.get(10)?,
+
+                    plugin: None,
+                    plugin_opts: None,
+                    plugin_args: None,
+                    updated_at: None,
+                    users: Vec::new()
+                })
+            })
+            .optional()?;
+
+        Ok(server)
+    }
 
     // pub fn update_server(&self, server: &ServerConfig) -> Result<(), RusqliteError> {
     //     let now = chrono::Utc::now().naive_utc();
@@ -656,7 +667,7 @@ impl Database {
     pub fn add_or_update_users(&mut self, add_user: &AddUser) -> Result<(), RusqliteError> {
         // First collect all existing users, using key as the HashMap key
         let existing_users: HashMap<_, _> = self
-            .get_users_by_server(add_user.server_port as u32)?
+            .get_users_by_server(add_user.server_port as u16)?
             .into_iter()
             .map(|user| (user.key.clone(), user))
             .collect();
@@ -674,7 +685,7 @@ impl Database {
                             active = ?2,
                             updated_at = CURRENT_TIMESTAMP
                          WHERE key = ?3 AND server_port = ?4",
-                        params![user.name, true, user.password, add_user.server_port as u32,],
+                        params![user.name, true, user.password, add_user.server_port,],
                     )?;
                 }
                 None => {
@@ -684,7 +695,7 @@ impl Database {
                             name, key, server_port, active,
                             created_at, updated_at
                         ) VALUES (?1, ?2, ?3, ?4, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
-                        params![user.name, user.password, add_user.server_port as u32, true,],
+                        params![user.name, user.password, add_user.server_port, true,],
                     )?;
                 }
             }
@@ -695,7 +706,7 @@ impl Database {
             "UPDATE servers SET
                 updated_at = CURRENT_TIMESTAMP
              WHERE port = ?1",
-            params![add_user.server_port as u32],
+            params![add_user.server_port],
         )?;
 
         tx.commit()?;
@@ -703,7 +714,7 @@ impl Database {
     }
 
     // Helper function to check if a user exists
-    pub fn user_exists(&self, name: &str, server_port: u32) -> Result<bool, RusqliteError> {
+    pub fn user_exists(&self, name: &str, server_port: u16) -> Result<bool, RusqliteError> {
         let count: i64 = self.conn.query_row(
             "SELECT COUNT(*) FROM users WHERE name = ?1 AND server_port = ?2",
             params![name, server_port],
@@ -714,7 +725,7 @@ impl Database {
     }
 
     // Helper function to get user by name and server port
-    pub fn get_user(&self, name: &str, server_port: u32) -> Result<Option<UserConfig>, RusqliteError> {
+    pub fn get_user(&self, name: &str, server_port: u16) -> Result<Option<UserConfig>, RusqliteError> {
         let mut stmt = self.conn.prepare(
             "SELECT id, name, key, server_port, active, remarks, created_at, updated_at
              FROM users
@@ -722,16 +733,7 @@ impl Database {
         )?;
 
         stmt.query_row(params![name, server_port], |row| {
-            Ok(UserConfig {
-                id: Some(row.get(0)?),
-                name: row.get(1)?,
-                key: row.get(2)?,
-                server_port: row.get(3)?,
-                active: row.get(4)?,
-                remarks: row.get(5)?,
-                created_at: row.get(6)?,
-                updated_at: row.get(7)?,
-            })
+            self.get_user_from_row(row)
         })
         .optional()
     }
@@ -767,18 +769,44 @@ impl Database {
         )?;
 
         stmt.query_row(params![id], |row| {
-            Ok(UserConfig {
-                id: Some(row.get(0)?),
-                name: row.get(1)?,
-                key: row.get(2)?,
-                server_port: row.get(3)?,
-                active: row.get(4)?,
-                remarks: row.get(5)?,
-                created_at: row.get(6)?,
-                updated_at: row.get(7)?,
-            })
+            self.get_user_from_row(row)
         })
             .optional()
+    }
+
+    pub fn list_users_with_url(&self, active_only: bool) -> Result<Vec<(UserConfig, (String, Option<String>))>, RusqliteError> {
+        let query = if active_only {
+            "SELECT users.id, users.name, users.key, users.server_port,
+                users.active, users.remarks, users.created_at, users.updated_at,
+                servers.method, servers.ip_address
+             FROM users
+             INNER JOIN servers ON servers.port = users.server_port
+             WHERE users.active = TRUE
+             ORDER BY users.id"
+        } else {
+            "SELECT id, name, key, server_port, active, remarks, created_at, updated_at
+             FROM users
+             ORDER BY id"
+        };
+
+        let mut stmt = self.conn.prepare(query)?;
+
+        let users = stmt.query_map([], |row| {
+                let url = match generate_ssurl(
+                    &row.get::<usize, String>(9)?,
+                    row.get(3)?,
+                    &row.get::<usize, String>(8)?,
+                    &row.get::<usize, String>(2)?,
+                    Some(&row.get::<usize, String>(1)?)
+                ) {
+                    Ok(url) => Some(url),
+                    Err(_) => Some("Error generating URL".to_string()),
+                };
+            Ok((self.get_user_from_row(row)?,(row.get::<usize, String>(8)?, url)))
+        })?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(users)
     }
     pub fn list_users(&self, active_only: bool) -> Result<Vec<UserConfig>, RusqliteError> {
         let query = if active_only {
@@ -795,20 +823,23 @@ impl Database {
         let mut stmt = self.conn.prepare(query)?;
 
         let users = stmt.query_map([], |row| {
-            Ok(UserConfig {
-                id: Some(row.get(0)?),
-                name: row.get(1)?,
-                key: row.get(2)?,
-                server_port: row.get(3)?,
-                active: row.get(4)?,
-                remarks: row.get(5)?,
-                created_at: row.get(6)?,
-                updated_at: row.get(7)?,
-            })
+            self.get_user_from_row(row)
         })?
             .collect::<Result<Vec<_>, _>>()?;
 
         Ok(users)
+    }
+    fn get_user_from_row(&self, row: &Row) -> Result<UserConfig, RusqliteError> {
+        Ok(UserConfig {
+            id: Some(row.get(0)?),
+            name: row.get(1)?,
+            key: row.get(2)?,
+            server_port: row.get(3)?,
+            active: row.get(4)?,
+            remarks: row.get(5)?,
+            created_at: row.get(6)?,
+            updated_at: row.get(7)?,
+        })
     }
 
     // Function to update an existing user
@@ -924,24 +955,45 @@ impl Database {
         &mut self,
         name: String,
         key: String,
-        server_port: u32,
+        server_port: u16,
         active: bool,
-    ) -> Result<UserConfig, rusqlite::Error> {
-        // Start a transaction so we can rollback if anything fails
-        let tx = self.conn.transaction()?;
+    ) -> Result<(UserConfig, Option<String>), rusqlite::Error> {
 
-        // First verify the server exists and is active
-        let server_exists: bool = tx.query_row(
-            "SELECT EXISTS(SELECT 1 FROM servers WHERE port = ? AND active = TRUE)",
-            params![server_port],
-            |row| row.get(0),
-        )?;
-
-        if !server_exists {
-            return Err(rusqlite::Error::InvalidParameterName(
-                "Server port does not exist or is not active".into(),
-            ));
+        let mut url:Option<String> = None;
+        // if let Ok(srvs) = self.get_server(server_port) {
+        match self.get_server(server_port) {
+            Ok(srvs) => {
+                match srvs {
+                    Some(srv) => {
+                        let ipaddr = &srv.ip_address;
+                        let method = &srv.method;
+                        url = match generate_ssurl(
+                            &ipaddr,
+                            server_port,
+                            method,
+                            &key,
+                            Some(&name)
+                        ) {
+                            Ok(url) => Some(url),
+                            Err(_) => None
+                        };
+                    },
+                    None => {
+                        return Err(rusqlite::Error::InvalidParameterName(
+                            "Server port does not exist or is not active".into(),
+                        ));
+                    }
+                }
+            }
+            Err(err) => {
+                error!("failed to get server port: {}", err);
+                return Err(rusqlite::Error::InvalidParameterName(
+                    "Failed to get server".into(),
+                ));
+            }
         }
+
+        let tx = self.conn.transaction()?;
 
         // Verify name and port combination is unique
         let name_exists: bool = tx.query_row(
@@ -986,7 +1038,7 @@ impl Database {
         tx.commit()?;
 
         // Return the created user config
-        Ok(UserConfig {
+        Ok((UserConfig {
             id: Some(id),
             name,
             key,
@@ -995,10 +1047,10 @@ impl Database {
             remarks: None,
             created_at: Some(now),
             updated_at: Some(now),
-        })
+        }, url))
     }
 
-    pub fn get_users_by_server(&self, server_port: u32) -> Result<Vec<UserConfig>, RusqliteError> {
+    pub fn get_users_by_server(&self, server_port: u16) -> Result<Vec<UserConfig>, RusqliteError> {
         let mut stmt = self.conn.prepare(
             "SELECT
                 id, name, key, server_port, active, remarks,

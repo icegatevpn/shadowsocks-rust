@@ -32,7 +32,7 @@ use tokio::{
 };
 use uuid::Uuid;
 use shadowsocks_service::mysql_db::{Database, SsUrlParams};
-use crate::service::url_generator::generate_ssurl;
+use shadowsocks_service::url_generator::generate_ssurl;
 
 #[derive(Debug, Deserialize)]
 struct ManagerCommand {
@@ -65,11 +65,6 @@ struct GenerateKeyRequest {
     method: Option<String>,
 }
 
-// #[derive(Clone)]
-// struct AppState {
-//     command_tx: Sender<(String, String)>, // (command, command_id)
-//     pending_requests: Arc<Mutex<HashMap<String, oneshot::Sender<String>>>>,
-// }
 #[derive(Clone)]
 struct AppState {
     command_tx: Sender<(String, String)>,
@@ -271,6 +266,8 @@ pub async fn run_web_service(manager_socket_path: String, host_name: String, db:
         db
     };
 
+
+
     // Create router
     let app = Router::new()
         .route("/health", get(health_check))
@@ -285,7 +282,7 @@ pub async fn run_web_service(manager_socket_path: String, host_name: String, db:
 
         // Add new REST API endpoints
         .route("/access-keys", get(list_access_keys))
-        // .route("/access-keys", post(create_access_key))
+        .route("/access-keys", post(create_access_key))
         // .route("/access-keys/:id", get(get_access_key))
         // .route("/access-keys/:id", delete(remove_access_key))
         // .route("/access-keys/:id/name", put(rename_access_key))
@@ -405,7 +402,7 @@ impl IntoApiError for &str {
 }
 #[derive(Debug, Serialize)]
 struct AccessKeyListResponse {
-    access_keys: Vec<AccessKey>,
+    access_keys: Vec<(AccessKey)>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -413,62 +410,62 @@ struct AccessKey {
     id: Option<String>,
     name: Option<String>,
     password: Option<String>,
-    port: Option<u32>,
+    port: Option<u16>,
     method: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     access_url: Option<String>,
 }
 // Add new REST API handlers
+
+async fn create_access_key(
+    State(state): State<AppState>,
+) -> impl IntoResponse {
+    let mut db = state.db.lock().await;
+
+    // Generate a random key
+    let password = generate_key(DEFAULT_CIPHER_METHOD).expect("Failed to generate key");
+    let servers = db.list_servers(true).expect("Failed to list servers");
+    let server = servers
+        .first().expect("No server found")
+        .clone();
+
+    // Create new user
+    let (user, url) = db.add_user(
+        format!("user_{}", chrono::Utc::now().timestamp()),
+        password.clone(),
+        server.port,
+        true,
+    ).expect("failed to add New User");
+
+    (StatusCode::OK, Json(AccessKey {
+        id: Some(user.id.unwrap_or(0).to_string()),
+        name: Some(user.name),
+        password: Some(user.key),
+        port: Some(user.server_port),
+        method: Some(DEFAULT_CIPHER_METHOD.to_string()),
+        access_url: url,
+    }))
+}
 async fn list_access_keys(State(state): State<AppState>) -> impl IntoResponse {//Result<Json<AccessKeyListResponse>> {
     debug!("List access keys....");
     let db = state.db.lock().await;
 
-    let users = db.list_users(true)
+    let users = db.list_users_with_url(true)
         .map_err(|e| ApiError::DatabaseError(e.to_string())).expect("Failed to list users");
 
     let access_keys = users.into_iter()
-        .map(|user| AccessKey {
+        .map(|(user, (method, url))| AccessKey {
             id: Some(user.id.unwrap_or(0).to_string()),
             name: Some(user.name),
             password: Some(user.key),
             port: Some(user.server_port),
-            method: Some(DEFAULT_CIPHER_METHOD.to_string()),
-            access_url: None,
+            method: Some(method),
+            access_url: url,
         })
         .collect();
 
     (StatusCode::OK,Json(AccessKeyListResponse { access_keys }))
 }
-
-// build_ssurl_params_from_user_id
-// async fn generate_ssurl_handler2(
-//     params: SsUrlParams,
-// ) -> impl IntoResponse {
-//     match generate_ssurl(
-//         &params.server_address,
-//         params.server_port,
-//         &params.method,
-//         &params.password,
-//         params.name.as_deref()
-//     ) {
-//         Ok(url) => (
-//             StatusCode::OK,
-//             Json(ApiResponse {
-//                 success: true,
-//                 message: "SS URL generated successfully".to_string(),
-//                 data: Some(url),
-//             }),
-//         ),
-//         Err(err) => (
-//             StatusCode::BAD_REQUEST,
-//             Json(ApiResponse {
-//                 success: false,
-//                 message: err.to_string(),
-//                 data: None,
-//             }),
-//         ),
-//     }
-// }
 
 async fn generate_ssurl_handler(
     State(state): State<AppState>,

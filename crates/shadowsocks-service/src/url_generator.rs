@@ -1,8 +1,8 @@
-use base64::{Engine};
+use base64::Engine;
 use serde::{Deserialize, Serialize};
 use std::fmt::Write;
-use shadowsocks_service::{config::Config, shadowsocks::{ServerAddr, ServerConfig}};
-use shadowsocks_service::shadowsocks::config::URL_PASSWORD_BASE64_ENGINE;
+use shadowsocks::config::URL_PASSWORD_BASE64_ENGINE;
+use shadowsocks::{ServerAddr, ServerConfig};
 
 #[derive(Debug)]
 pub enum SsUrlError {
@@ -76,7 +76,7 @@ pub fn generate_ssurl_from_config(config: &ServerConfig, name: Option<&str>) -> 
 
 #[cfg(test)]
 mod tests {
-    use shadowsocks_service::config::ConfigType;
+    use crate::config::{Config, ConfigType};
     use super::*;
 
     #[test]

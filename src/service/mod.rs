@@ -10,4 +10,3 @@ pub mod server;
 mod web_service;
 mod domain_connection;
 mod key_generator;
-mod url_generator;
