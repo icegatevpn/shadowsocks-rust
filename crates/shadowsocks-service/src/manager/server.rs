@@ -158,7 +158,6 @@ impl ManagerBuilder {
 
     /// Build the manager server instance
     pub async fn build(self) -> io::Result<Manager> {
-        debug!("<< building manager: {}", &self.svr_cfg.addr);
         let listener = ManagerListener::bind(&self.context, &self.svr_cfg.addr).await?;
         Ok(Manager {
             context: self.context,
@@ -208,10 +207,9 @@ impl Manager {
         info!("shadowsocks manager server listening on {}", local_addr);
 
         loop {
-            me_debug!("<< inloop!! >>");
             let (req, peer_addr) = match self.listener.recv_from().await {
                 Ok(r) => {
-                    debug!("<< received a thing: {:?}", r);
+                    debug!("received a manager config: {:?}", r);
                     r
                 },
                 Err(err) => {
@@ -289,12 +287,12 @@ impl Manager {
     pub async fn add_server(&self, svr_cfg: ServerConfig) {
         match self.svr_cfg.server_mode {
             ManagerServerMode::Builtin => {
-                debug!("<< built-in server mode >>");
+                trace!("built-in server mode");
                 self.add_server_builtin(svr_cfg).await
             },
             #[cfg(unix)]
             ManagerServerMode::Standalone => {
-                debug!("<< standalone server mode >>");
+                trace!("standalone server mode");
                 self.add_server_standalone(svr_cfg).await
             },
         }
@@ -638,6 +636,7 @@ impl Manager {
     async fn handle_add_user(&self, req: &AddUserRequest) -> io::Result<AddUserResponse> {
         let new_config = &req.config;
         let port  = new_config.server_port;
+        debug!("<<<< handle add user: {:?}", new_config);
         if let Some(mut existing_config) =self.get_config(port).await {
             match ServerUserManager::user_manager_with_users(&new_config.users) {
                 Ok(mut new_manager) => {

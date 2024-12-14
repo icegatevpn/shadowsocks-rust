@@ -43,7 +43,7 @@ impl ProxyListener {
                             -> JoinHandle<()> {
         let um_in = Arc::clone(&self.user_manager_fancy);
         tokio::spawn(async move {
-            warn!("Receiving Config....");
+            debug!("Receiving Config....");
             loop {
                 let um = user_manager_rcv.recv().await;
                 if let Some(um) = um {

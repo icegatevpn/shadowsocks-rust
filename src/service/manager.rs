@@ -23,7 +23,7 @@ use shadowsocks_service::{
         plugin::PluginConfig,
     },
 };
-
+use shadowsocks_service::mysql_db::generate_manager_key;
 #[cfg(feature = "logging")]
 use crate::logging;
 use crate::{
@@ -32,6 +32,7 @@ use crate::{
 };
 // use crate::service::mysql_db::Database;
 use crate::service::web_service::run_web_service;
+
 
 /// Defines command line options
 pub fn define_command_line_options(mut app: Command) -> Command {
@@ -580,7 +581,7 @@ pub fn create(matches: &ArgMatches) -> Result<(Runtime, impl Future<Output = Exi
         let host = format!("{}:8080",config.server.first()
             .expect("No server")
             .config.addr()
-            .host()
+            .host(),
         );
         let abort_signal = monitor::create_signal_monitor();
         let db = database.unwrap();
@@ -592,7 +593,9 @@ pub fn create(matches: &ArgMatches) -> Result<(Runtime, impl Future<Output = Exi
         // let mut binding = db.lock().await;
         let server = run_manager(config, Some(&mut db));
 
-        tokio::spawn(run_web_service(SOCKET_PATH.to_string(), host, web_db));
+        let url_key = generate_manager_key().expect("Failed to generate URL key!");
+
+        tokio::spawn(run_web_service(SOCKET_PATH.to_string(), host, url_key, web_db));
         warn!("Started!!!");
         tokio::pin!(abort_signal);
         tokio::pin!(server);

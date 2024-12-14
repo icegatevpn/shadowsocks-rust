@@ -237,14 +237,13 @@ impl UdpServer {
         // Make a clone to self.listener to avoid borrowing self
         let listener = self.listener.clone();
 
-//todo make this work
         let listening = match self.user_manager_rcv.take() {
             Some(receiver) => Some(self.listener.listen_for_users(receiver)),
             None => None
         };
 
         loop {
-            debug!("Still listening for user manager on UDPRelay: {:?}",listening.is_some());
+            debug!("Still listening for user manager on UDPRelay");
             tokio::select! {
                 _ = cleanup_timer.tick() => {
                     // cleanup expired associations. iter() will remove expired elements

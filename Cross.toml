@@ -15,28 +15,38 @@ passthrough = [
 ]
 
 # Common settings for all Android targets
-[target.'cfg(target_os = "android")']
-image = "ghcr.io/cross-rs/android:latest"
-xargo = false
+#[target.'cfg(target_os = "android")']
+#image = "ghcr.io/cross-rs/android:latest"
+#xargo = false
 
 # Architecture-specific configurations
 [target.aarch64-linux-android]
 image = "ghcr.io/cross-rs/aarch64-linux-android:latest"
+[target.aarch64-linux-android.env]
+CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER = "aarch64-linux-android-clang"
+CFLAGS = "-fPIC"
 
 [target.armv7-linux-androideabi]
 image = "ghcr.io/cross-rs/armv7-linux-androideabi:latest"
+[target.armv7-linux-androideabi.env]
+CARGO_TARGET_ARMV7_LINUX_ANDROIDEABI_LINKER = "armv7a-linux-androideabi-clang"
+CFLAGS = "-fPIC"
 
 [target.i686-linux-android]
 image = "ghcr.io/cross-rs/i686-linux-android:latest"
+[target.i686-linux-android.env]
+CARGO_TARGET_I686_LINUX_ANDROID_LINKER = "i686-linux-android-clang"
+CFLAGS = "-fPIC"
 
 [target.x86_64-linux-android]
 image = "ghcr.io/cross-rs/x86_64-linux-android:latest"
+[target.x86_64-linux-android.env]
+CARGO_TARGET_X86_64_LINUX_ANDROID_LINKER = "x86_64-linux-android-clang"
+CFLAGS = "-fPIC"
 
-# Common linker arguments for Android targets
-[target.'cfg(target_os = "android")'.env]
-CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER = "aarch64-linux-android-clang"
-CARGO_TARGET_ARMV7_LINUX_ANDROIDEABI_LINKER = "armv7a-linux-androideabi-clang"
-CARGO_TARGET_I686_LINUX_ANDROID_LINKER = "i686-linux-android-clang"
+[target.x86_64-unknown-linux-gnu]
+pre-build = ["apt-get update && apt-get install -y libsqlite3-dev"]
+
 CARGO_TARGET_X86_64_LINUX_ANDROID_LINKER = "x86_64-linux-android-clang"
 CFLAGS = "-fPIC"
 

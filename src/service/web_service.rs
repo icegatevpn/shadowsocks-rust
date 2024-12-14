@@ -1,6 +1,8 @@
 use crate::service::domain_connection::connect_domain_socket;
 use crate::service::key_generator::generate_key;
 use async_channel::{unbounded, Receiver, Sender};
+use axum::extract::{Path as AxPath, Path};
+use axum::routing::{delete, put};
 use axum::{
     extract::State,
     http::StatusCode,
@@ -8,19 +10,17 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use axum::extract::{Path as AxPath, Path};
 use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
 use shadowsocks::manager::protocol::AddUser;
+use shadowsocks_service::mysql_db::Database;
 use shadowsocks_service::shadowsocks;
+use shadowsocks_service::url_generator::generate_ssurl;
 use std::{collections::HashMap, fmt, sync::Arc};
-use axum::routing::{delete, put};
 use tokio::{
     sync::{oneshot, Mutex},
     time::{timeout, Duration},
 };
-use shadowsocks_service::mysql_db::{Database};
-use shadowsocks_service::url_generator::generate_ssurl;
 
 #[derive(Debug, Deserialize)]
 struct ManagerCommand {
@@ -239,11 +239,15 @@ macro_rules! make_command_handler {
 make_command_handler!(cmd_list, "list");
 make_command_handler!(cmd_ping, "ping");
 
-pub async fn run_web_service(manager_socket_path: String, host_name: String, db: Arc<Mutex<Database>>) {
+pub async fn run_web_service(
+    manager_socket_path: String,
+    host_name: String,
+    url_key: String,
+    db: Arc<Mutex<Database>>,
+) {
     // Create channel for commands
     let (command_tx, command_rx) = unbounded();
     let pending_requests = Arc::new(Mutex::new(HashMap::new()));
-
 
     tokio::spawn(socket_listener(
         manager_socket_path,
@@ -255,33 +259,32 @@ pub async fn run_web_service(manager_socket_path: String, host_name: String, db:
     let state = AppState {
         command_tx,
         pending_requests,
-        db
+        db,
     };
 
-    async fn get_access_key(
-        State(state): State<AppState>,
-        Path(id): Path<String>,
-    ) -> impl IntoResponse {
+    async fn get_access_key(State(state): State<AppState>, Path(id): Path<String>) -> impl IntoResponse {
         let db = state.db.lock().await;
-        let user_and_url = db.list_users_with_url(true, Some(id.parse().unwrap()))
-            .map_err(|e| ApiError::DatabaseError(e.to_string())).expect("Failed to list users");
+        let user_and_url = db
+            .list_users_with_url(true, Some(id.parse().unwrap()))
+            .map_err(|e| ApiError::DatabaseError(e.to_string()))
+            .expect("Failed to list users");
 
         let (user, (method, url)) = user_and_url.first().unwrap();
 
-        (StatusCode::OK, Json(AccessKey {
-            id: Some(user.id.unwrap_or(0).to_string()),
-            name: Some(user.name.clone()),
-            password: Some(user.key.clone()),
-            port: Some(user.server_port),
-            method: Some(method.clone()),
-            access_url: url.clone(),
-        }))
+        (
+            StatusCode::OK,
+            Json(AccessKey {
+                id: Some(user.id.unwrap_or(0).to_string()),
+                name: Some(user.name.clone()),
+                password: Some(user.key.clone()),
+                port: Some(user.server_port),
+                method: Some(method.clone()),
+                access_url: url.clone(),
+            }),
+        )
     }
 
-    async fn remove_access_key(
-        State(state): State<AppState>,
-        Path(id): Path<String>,
-    ) -> impl IntoResponse {
+    async fn remove_access_key(State(state): State<AppState>, Path(id): Path<String>) -> impl IntoResponse {
         let mut db = state.db.lock().await;
         let num_users = db.remove_user(id.parse().unwrap()).expect("Failed to remove user");
         (StatusCode::OK, num_users)
@@ -305,36 +308,40 @@ pub async fn run_web_service(manager_socket_path: String, host_name: String, db:
         Json(req): Json<RenameRequest>,
     ) -> impl IntoResponse {
         let db = state.db.lock().await;
-        let num_removed = db.rename_user(id.parse().unwrap(), &req.name).expect("Failed to rename key");
-        (StatusCode::OK,format!("Renamed keys: {:?}", num_removed))
+        let num_removed = db
+            .rename_user(id.parse().unwrap(), &req.name)
+            .expect("Failed to rename key");
+        (StatusCode::OK, format!("Renamed keys: {:?}", num_removed))
     }
 
     // Create router
     let app = Router::new()
-        .route("/health", get(health_check))
-        .route("/command", post(handle_command))
-        .route("/list", get(cmd_list))
-        .route("/ping", get(cmd_ping))
-        .route("/add_user", post(add_user))
-        .route("/generate_key", post(generate_cipher_key_post))
-        .route("/generate_key", get(generate_cipher_key))
-        .route("/generate_key/:method", get(generate_cipher_key))
-        .route("/url/:user_id", get(generate_ssurl_handler))
+        // .route(&format!({}"/health", url_key), get(health_check))
+        .route(&format!("/{}/health", url_key), get(health_check))
+        .route(&format!("/{}/command",url_key), post(handle_command))
+        .route(&format!("/{}/list", url_key), get(cmd_list))
+        .route(&format!("/{}/ping", url_key), get(cmd_ping))
+        .route(&format!("/{}/add_user", url_key), post(add_user))
+        .route(&format!("/{}/generate_key", url_key), post(generate_cipher_key_post))
+        .route(&format!("/{}/generate_key", url_key), get(generate_cipher_key))
+        .route(&format!("/{}/generate_key/:method", url_key), get(generate_cipher_key))
+        .route(&format!("/{}/url/:user_id", url_key), get(generate_ssurl_handler))
 
         // Add new REST API endpoints
-        .route("/access-keys", get(list_access_keys))
-        .route("/access-keys", post(create_access_key))
-        .route("/access-keys/:id", get(get_access_key))
-        .route("/access-keys/:id", delete(remove_access_key))
-        .route("/access-keys/:id/name", put(rename_access_key))
+        .route(&format!("/{}/access-keys", url_key), get(list_access_keys))
+        .route(&format!("/{}/access-keys", url_key), post(create_access_key))
+        .route(&format!("/{}/access-keys/:id", url_key), get(get_access_key))
+        .route(&format!("/{}/access-keys/:id", url_key), delete(remove_access_key))
+        .route(&format!("/{}/access-keys/:id/name", url_key), put(rename_access_key))
         // .route("/metrics/transfer", get(get_metrics))
         .with_state(state);
 
+    // let addr = format!("{}:{}", host_name, url_key);
     let listener = tokio::net::TcpListener::bind(host_name.clone())
         .await
-        .expect("Failed to bind to port 8080");
+        .expect(&format!("Failed to bind to {}", host_name));
 
-    info!("Web service listening on http://{}", host_name);
+    info!("Web service listening on http://{}/{}", host_name, url_key);
 
     axum::serve(listener, app).await.expect("Web service failed");
 }
@@ -460,42 +467,51 @@ struct AccessKey {
 }
 // Add new REST API handlers
 
-async fn create_access_key(
-    State(state): State<AppState>,
-) -> impl IntoResponse {
+async fn create_access_key(State(state): State<AppState>) -> impl IntoResponse {
     let mut db = state.db.lock().await;
 
     // Generate a random key
     let password = generate_key(DEFAULT_CIPHER_METHOD).expect("Failed to generate key");
     let servers = db.list_servers(true).expect("Failed to list servers");
-    let server = servers
-        .first().expect("No server found");
+    let server = servers.first().expect("No server found");
 
     // Create new user
-    let (user, url) = db.add_user(
-        format!("user_{}", chrono::Utc::now().timestamp()),
-        password.clone(),
-        server.port,
-        true,
-    ).expect("failed to add New User");
+    let (user, url) = db
+        .add_user(
+            format!("user_{}", chrono::Utc::now().timestamp()),
+            password.clone(),
+            server.port,
+            true,
+        )
+        .expect("failed to add New User");
 
-    (StatusCode::OK, Json(AccessKey {
-        id: Some(user.id.unwrap_or(0).to_string()),
-        name: Some(user.name),
-        password: Some(user.key),
-        port: Some(user.server_port),
-        method: Some(DEFAULT_CIPHER_METHOD.to_string()),
-        access_url: url,
-    }))
+    
+    // todo add new user to server config!!  (socket command addu ?????)
+
+    (
+        StatusCode::OK,
+        Json(AccessKey {
+            id: Some(user.id.unwrap_or(0).to_string()),
+            name: Some(user.name),
+            password: Some(user.key),
+            port: Some(user.server_port),
+            method: Some(DEFAULT_CIPHER_METHOD.to_string()),
+            access_url: url,
+        }),
+    )
 }
-async fn list_access_keys(State(state): State<AppState>) -> impl IntoResponse {//Result<Json<AccessKeyListResponse>> {
+async fn list_access_keys(State(state): State<AppState>) -> impl IntoResponse {
+    //Result<Json<AccessKeyListResponse>> {
     debug!("List access keys....");
     let db = state.db.lock().await;
 
-    let users = db.list_users_with_url(true, None)
-        .map_err(|e| ApiError::DatabaseError(e.to_string())).expect("Failed to list users");
+    let users = db
+        .list_users_with_url(true, None)
+        .map_err(|e| ApiError::DatabaseError(e.to_string()))
+        .expect("Failed to list users");
 
-    let access_keys = users.into_iter()
+    let access_keys = users
+        .into_iter()
         .map(|(user, (method, url))| AccessKey {
             id: Some(user.id.unwrap_or(0).to_string()),
             name: Some(user.name),
@@ -506,27 +522,20 @@ async fn list_access_keys(State(state): State<AppState>) -> impl IntoResponse {/
         })
         .collect();
 
-    (StatusCode::OK,Json(AccessKeyListResponse { access_keys }))
+    (StatusCode::OK, Json(AccessKeyListResponse { access_keys }))
 }
 
-async fn generate_ssurl_handler(
-    State(state): State<AppState>,
-    user_id: Option<AxPath<i64>>,
-) -> impl IntoResponse {
-    let user_id = user_id
-        .map(|m| m.0)
-        .unwrap_or_else(|| -1);
+async fn generate_ssurl_handler(State(state): State<AppState>, user_id: Option<AxPath<i64>>) -> impl IntoResponse {
+    let user_id = user_id.map(|m| m.0).unwrap_or_else(|| -1);
 
     let db = state.db.lock().await;
-    if let Ok(params) = db.build_ssurl_params_from_user_id(
-        user_id, "oops"
-    ) {
+    if let Ok(params) = db.build_ssurl_params_from_user_id(user_id, "oops") {
         match generate_ssurl(
             &params.server_address,
             params.server_port,
             &params.method,
             &params.password,
-            params.name.as_deref()
+            params.name.as_deref(),
         ) {
             Ok(url) => (
                 StatusCode::OK,
@@ -570,14 +579,10 @@ async fn health_check() -> impl IntoResponse {
 
 const DEFAULT_CIPHER_METHOD: &str = "2022-blake3-aes-256-gcm";
 
-async fn generate_cipher_key(
-    method: Option<AxPath<String>>,
-) -> impl IntoResponse {
+async fn generate_cipher_key(method: Option<AxPath<String>>) -> impl IntoResponse {
     debug!("generate cipher_key method: {:?}", method);
     // Use the provided method or fall back to default
-    let method = method
-        .map(|m| m.0)
-        .unwrap_or_else(|| DEFAULT_CIPHER_METHOD.to_string());
+    let method = method.map(|m| m.0).unwrap_or_else(|| DEFAULT_CIPHER_METHOD.to_string());
 
     match generate_key(&method) {
         Ok(key) => (
@@ -598,7 +603,7 @@ async fn generate_cipher_key(
         ),
     }
 }
-async fn generate_cipher_key_post(Json(payload): Json<GenerateKeyRequest>,) -> impl IntoResponse {
+async fn generate_cipher_key_post(Json(payload): Json<GenerateKeyRequest>) -> impl IntoResponse {
     let method = payload.method.as_deref().unwrap_or(DEFAULT_CIPHER_METHOD);
     match generate_key(method) {
         Ok(key) => (

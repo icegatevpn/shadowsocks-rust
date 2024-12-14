@@ -18,7 +18,7 @@ maintenance = { status = "passively-maintained" }
 default = ["hickory-dns", "aead-cipher"]
 
 # Uses Hickory-DNS instead of tokio's builtin DNS resolver
-hickory-dns = ["hickory-resolver", "arc-swap", "notify"]
+hickory-dns = ["hickory-resolver", "notify"]
 # Hickory-DNS was renamed from Trust-DNS, keep compatibility.
 trust-dns = ["hickory-dns"]
 
@@ -88,7 +88,7 @@ tokio = { version = "1.9.0", features = [
 ] }
 
 hickory-resolver = { version = "0.25.0-alpha", optional = true }
-arc-swap = { version = "1.7", optional = true }
+arc-swap = { version = "1.7"}
 notify = { version = "7.0", optional = true }
 
 aes = { version = "0.8", optional = true }

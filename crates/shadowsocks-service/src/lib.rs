@@ -85,7 +85,7 @@ const DEFAULT_UDP_EXPIRY_DURATION: Duration = Duration::from_secs(5 * 60);
 macro_rules! me_debug {
     ( $( $x:expr ),* ) => {
         {
-            log::warn!($( $x, )*);
+            log::debug!("<<<< {}", format!($( $x ),*));
         }
     };
 }

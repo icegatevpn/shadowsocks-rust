@@ -56,7 +56,6 @@ pub enum ManagerDatagram {
 impl ManagerDatagram {
     /// Create a `ManagerDatagram` binding to requested `bind_addr`
     pub async fn bind(context: &Context, bind_addr: &ManagerAddr) -> io::Result<ManagerDatagram> {
-        debug!("<< BIND!!: {}", bind_addr);
         match *bind_addr {
             ManagerAddr::SocketAddr(ref saddr) =>  {
                 debug!("<< ss socket: {}", saddr);
@@ -73,12 +72,11 @@ impl ManagerDatagram {
             }
             #[cfg(unix)]
             ManagerAddr::UnixSocketAddr(ref path) => {
-                debug!("<< pathL {:?}", path);
                 use std::fs;
 
-                // Remove it first incase it is already exists
+                // Remove it first in case it already exists
                 let r = fs::remove_file(path);
-                debug!("<<<< rremoved: {:?}", r);
+                debug!("removed: {:?}", r);
 
                 Ok(ManagerDatagram::UnixDatagram(UnixDatagram::bind(path)?))
             }
