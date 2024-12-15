@@ -140,6 +140,8 @@ struct SSConfig {
     manager_address: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     manager_port: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    manager_tcp_port: Option<u16>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     password: Option<String>,
@@ -1299,6 +1301,9 @@ pub struct Config {
     /// Local server configuration
     pub local: Vec<LocalInstanceConfig>,
 
+    // Port that the tcp manager listens on
+    pub manager_tcp_port: Option<u16>,
+
     /// DNS configuration, uses system-wide DNS configuration by default
     ///
     /// Value could be a `IpAddr`, uses UDP DNS protocol with port `53`. For example: `8.8.8.8`
@@ -1470,6 +1475,7 @@ impl Config {
         Config {
             server: Vec::new(),
             local: Vec::new(),
+            manager_tcp_port: None,
 
             dns: DnsConfig::default(),
             dns_cache_size: None,
@@ -1525,6 +1531,7 @@ impl Config {
 
     fn load_from_ssconfig(config: SSConfig, config_type: ConfigType) -> Result<Config, Error> {
         let mut nconfig = Config::new(config_type);
+        nconfig.manager_tcp_port = config.manager_tcp_port;
 
         // Client
         //

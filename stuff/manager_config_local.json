@@ -2,6 +2,7 @@
   "old_manager_address": "127.0.0.1",
   "old_manager_port": 6100,
   "manager_address": "/tmp/ssm.sock",
+  "manager_tcp_port": 8080,
   "servers": [
     {
     "server": "127.0.0.1",

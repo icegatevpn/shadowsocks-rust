@@ -48,6 +48,14 @@ pub fn define_command_line_options(mut app: Command) -> Command {
                 .help("Shadowsocks configuration file (https://shadowsocks.org/doc/configs.html), the only required fields are \"manager_address\" and \"manager_port\". Servers defined will be created when process is started."),
         )
         .arg(
+            Arg::new("MANAGER_TCP_PORT")
+                .long("manager-tcp-port")
+                .num_args(1)
+                .action(ArgAction::Set)
+                .value_parser(clap::value_parser!(u16))
+                .help("Port for the manager's web service to listen on"),
+        )
+        .arg(
             Arg::new("DATABASE")
                 .short('D')
                 .long("database-path")
@@ -280,6 +288,11 @@ pub fn define_command_line_options(mut app: Command) -> Command {
 }
 
 static SOCKET_PATH: &str =  "/tmp/ssm.sock";
+static DEFAULT_DATABASE: &str = "ss_manager.db";
+
+fn create_default_database() -> Database {
+    Database::new(DEFAULT_DATABASE).expect("Failed to create default database")
+}
 
 /// Create `Runtime` and `main` entry
 pub fn create(matches: &ArgMatches) -> Result<(Runtime, impl Future<Output = ExitCode>), ExitCode> {
@@ -328,8 +341,10 @@ pub fn create(matches: &ArgMatches) -> Result<(Runtime, impl Future<Output = Exi
             .expect("Failed to open database");
 
         if database.is_none() {
-            return Err(crate::EXIT_CODE_LOAD_CONFIG_FAILURE.into());
+            warn!("No Database Configured, using default database: {:?}", DEFAULT_DATABASE);
+            database = Some(create_default_database())
         }
+
 
         // Load config and handle database updates
         let mut config = match config_path_opt {
@@ -343,7 +358,7 @@ pub fn create(matches: &ArgMatches) -> Result<(Runtime, impl Future<Output = Exi
                     }
                 };
 
-                // If we have both a config file and database, update the database
+                // If we have both a config file and database, update the database with the Config
                 if let Some(ref mut db) = database {
                     if let Err(err) = db.save_config_to_tables(&cfg) {
                         eprintln!("Error saving config to database: {err}");
@@ -378,6 +393,10 @@ pub fn create(matches: &ArgMatches) -> Result<(Runtime, impl Future<Output = Exi
                 }
             },
         };
+
+        if let Some(port) = matches.get_one::<u16>("MANAGER_TCP_PORT") {
+            config.manager_tcp_port = Some(*port);
+        }
 
         if matches.get_flag("TCP_NO_DELAY") {
             config.no_delay = true;
@@ -582,25 +601,20 @@ pub fn create(matches: &ArgMatches) -> Result<(Runtime, impl Future<Output = Exi
 
     let main_fut = async move {
 
-        let host = format!("{}:8080",config.server.first()
-            .expect("No server")
-            .config.addr()
-            .host(),
+        let host = format!("{}:{}",
+                           config.server.first()
+                               .expect("No server")
+                               .config.addr()
+                               .host(),
+                           config.manager_tcp_port.unwrap_or(8080)
         );
+
         let abort_signal = monitor::create_signal_monitor();
-
-        // let mut db = match database {
-        //     Some(db) => Some(&mut Arc::new(Mutex::new(db))),
-        //     None => None
-        // };
-
         let db = database.unwrap();
         let mut db = Arc::new(Mutex::new(db));
         // Clone the Arc for the web service
         let web_db = db.clone();
-
         let server = run_manager(config, Some(&mut db));
-
         let url_key = generate_manager_key().expect("Failed to generate URL key!");
 
         tokio::spawn(run_web_service(SOCKET_PATH.to_string(), host, url_key, web_db));
