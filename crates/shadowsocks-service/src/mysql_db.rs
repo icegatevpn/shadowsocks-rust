@@ -987,6 +987,7 @@ impl Database {
         server_port: u16,
         active: bool,
     ) -> Result<(UserConfig, Option<String>), Error> {
+        debug!("Adding user to databse {}:{}", name, key);
         let url: Option<String>;
         match self.get_server(server_port) {
             Ok(srvs) => match srvs {

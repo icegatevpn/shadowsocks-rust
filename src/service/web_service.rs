@@ -23,7 +23,6 @@ use tokio::{
     time::{timeout, Duration},
 };
 use uuid::Uuid;
-use shadowsocks_service::config::ManagerServerHost::Domain;
 
 #[derive(Debug, Deserialize)]
 struct ManagerCommand {
@@ -59,14 +58,14 @@ struct GenerateKeyRequest {
 
 #[derive(Clone)]
 struct AppState {
-    command_tx: Sender<(DomainCommand)>,
+    command_tx: Sender<DomainCommand>,
     pending_requests: Arc<Mutex<HashMap<Uuid, oneshot::Sender<String>>>>,
     db: Arc<Mutex<Database>>,
 }
 
 async fn socket_listener(
     socket_path: String,
-    command_rx: Receiver<(DomainCommand)>,
+    command_rx: Receiver<DomainCommand>,
     pending_requests: Arc<Mutex<HashMap<Uuid, oneshot::Sender<String>>>>,
 ) {
     let mut from_socket: Option<Receiver<DomainCommand>> = None;
@@ -85,14 +84,14 @@ async fn socket_listener(
             }
         }
     }
-    debug!(" <<<<<< Domain connection established for {:?}", socket_path);
+    debug!("Domain connection established for {:?}", socket_path);
     let socket_receiver = from_socket.unwrap();
     let sender = socket_sender.unwrap();
 
     tokio::spawn({
         let pending_requests = pending_requests.clone();
         async move {
-            while let Ok((command)) = command_rx.recv().await {
+            while let Ok(command) = command_rx.recv().await {
                 debug!("Sending command to socket: {:?}", &command.command);
                 if let Err(e) = sender.send(command.clone()).await {
                     error!("Failed to send command to socket: {}", e);
@@ -124,12 +123,7 @@ async fn socket_listener(
 
 async fn handle_command(State(state): State<AppState>, Json(payload): Json<ManagerCommand>) -> impl IntoResponse {
     let (response_tx, response_rx) = oneshot::channel();
-    // This is just a placeholder for a possible uuid to send to the socket and
-    // monitor for the return uuid. That would require additional work on the socket
-    // new DomainCommand
-
-
-    let command = DomainCommand::new(&payload.command);//Uuid::new_v4();
+    let command = DomainCommand::new(&payload.command);
 
     // Store the response channel
     {
@@ -139,46 +133,28 @@ async fn handle_command(State(state): State<AppState>, Json(payload): Json<Manag
 
     match state.command_tx.send(command).await {
         Ok(_) => match timeout(Duration::from_secs(COMMAND_TIMEOUT_SECS), response_rx).await {
-            Ok(Ok(response)) => (
+            Ok(Ok(_)) => (
                 StatusCode::OK,
-                Json(ApiResponse {
-                    success: true,
-                    message: "Command executed successfully".to_string(),
-                    data: Some(response),
-                }),
+                json_api_message(true, "Command executed successfully".to_string())
             ),
             Ok(Err(_)) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ApiResponse {
-                    success: false,
-                    message: "Response channel closed".to_string(),
-                    data: None,
-                }),
+                json_api_message(false, "Response channel closed".to_string())
             ),
             Err(_) => (
                 StatusCode::GATEWAY_TIMEOUT,
-                Json(ApiResponse {
-                    success: false,
-                    message: format!("Timeout waiting for response after {} seconds", COMMAND_TIMEOUT_SECS),
-                    data: None,
-                }),
+                json_api_message(false, format!("Timeout waiting for response after {} seconds", COMMAND_TIMEOUT_SECS))
             ),
         },
         Err(_) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ApiResponse {
-                success: false,
-                message: "Failed to send command to socket listener".to_string(),
-                data: None,
-            }),
+            json_api_message(false, "Failed to send command to socket listener".to_string())
         ),
     }
 }
 
 async fn send_command(state: &AppState, command: DomainCommand, timeout_secs: u64) -> (StatusCode, String) {
     let (response_tx, response_rx) = oneshot::channel();
-    // let command_id = "ONE".to_string(); // = Uuid::new_v4().to_string();
-
     // Store the response channel
     {
         let mut pending_requests = state.pending_requests.lock().await;
@@ -187,20 +163,13 @@ async fn send_command(state: &AppState, command: DomainCommand, timeout_secs: u6
     info!("Sending command to socket {:?}", command);
     let result = state.command_tx.send(command.clone()).await;
 
-    // Clean up callback on completion
-    let cleanup = || async {
-        let mut pending_requests = state.pending_requests.lock().await;
-        pending_requests.remove(&command.id);
-    };
-
     match result {
         Ok(_) => match timeout(Duration::from_secs(timeout_secs), response_rx).await {
             Ok(Ok(response)) => {
-                cleanup().await;
+                debug!("Received response from socket {:?}", response);
                 (StatusCode::OK, response)
             }
             _ => {
-                cleanup().await;
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "Command failed or timed out".to_string(),
@@ -215,10 +184,11 @@ async fn cmd_custom(State(state): State<AppState>, command: String) -> impl Into
     send_command(&state, DomainCommand::new(&command), COMMAND_TIMEOUT_SECS).await
 }
 
-/* POST Body content with json like so:
-   {"server_port":8387,"users":[
-       {"name":"user666","password":"a5b/0RGhOFvLKONeELya+nstg0S+O+Jn2T5x59AbFrM="}]
-   }
+/*
+    POST Body content with json like so:
+    {"server_port":8387,"users":[
+        {"name":"user666","password":"a5b/0RGhOFvLKONeELya+nstg0S+O+Jn2T5x59AbFrM="}]
+    }
 */
 async fn add_user(State(state): State<AppState>, command: String) -> impl IntoResponse {
     let config: AddUser = serde_json::from_str(&command).expect("json parse failed");
@@ -252,6 +222,7 @@ async fn remove_user(State(state): State<AppState>, key: Option<AxPath<String>>)
 
     debug!("<<<<< Command: {:?}", new_command);
     let (status, response) = send_command(&state, new_command, COMMAND_TIMEOUT_SECS).await;
+
     (status, Json(response))
 }
 
@@ -273,13 +244,22 @@ macro_rules! make_command_handler {
 make_command_handler!(cmd_list, &"list");
 make_command_handler!(cmd_ping, &"ping");
 
+fn json_api_message(success: bool, msg: String) -> Json<ApiResponse> {
+    Json(ApiResponse {
+        success,
+        message: msg,
+        data: None,
+    })
+}
 pub async fn run_web_service(
     manager_socket_path: String,
     host_name: String,
-    url_key: String,
+    random_url_key: String,
     db: Arc<Mutex<Database>>,
 ) {
-    let url_key = "".to_string();
+    let url_key =  if cfg!(debug_assertions) { "debug".to_string() }
+    else { random_url_key.clone() };
+
     // Create channel for commands
     let (command_tx, command_rx) = unbounded();
     let pending_requests = Arc::new(Mutex::new(HashMap::new()));
@@ -319,11 +299,6 @@ pub async fn run_web_service(
         )
     }
 
-    // async fn remove_access_key(State(state): State<AppState>, Path(id): Path<String>) -> impl IntoResponse {
-    //     let mut db = state.db.lock().await;
-    //     let num_users = db.remove_user(id.parse().unwrap()).expect("Failed to remove user");
-    //     (StatusCode::OK, num_users)
-    // }
     async fn remove_access_key(State(state): State<AppState>, Path(id): Path<String>) -> impl IntoResponse {
         let mut db = state.db.lock().await;
 
@@ -404,11 +379,67 @@ pub async fn run_web_service(
         Path(id): Path<String>,
         Json(req): Json<RenameRequest>,
     ) -> impl IntoResponse {
+        // todo updates config, not updating Database!!
         let db = state.db.lock().await;
-        let num_removed = db
-            .rename_user(id.parse().unwrap(), &req.name)
-            .expect("Failed to rename key");
-        (StatusCode::OK, format!("Renamed keys: {:?}", num_removed))
+        // First get the user's current details
+        let user = match db.get_user_by_id(id.parse().unwrap()) {
+            Ok(Some(user)) => user,
+            Ok(None) => {
+                return (StatusCode::NOT_FOUND,
+                        json_api_message(false, format!("User with id {} not found", id)))
+            }
+            Err(e) => {
+                error!("Database error when fetching user: {}", e);
+                return (StatusCode::INTERNAL_SERVER_ERROR,
+                        json_api_message(false, format!("Failed to fetch user: {}", e)))
+            }
+        };
+        let old_name = user.name.clone();
+        // Next remove the existing user from the service add db with the DomainCommand removeu
+        let remove_command = DomainCommand::new(&format!("removeu:{}", user.key));
+        let (status, response) = send_command(&state, remove_command, COMMAND_TIMEOUT_SECS).await;
+
+        if status != StatusCode::OK {
+            error!("Failed to remove user from ss-manager during rename: {}", response);
+            return (
+                status,
+                json_api_message(false, format!("Failed to remove existing user configuration: {}", response))
+            );
+        }
+        // Then Create AddUser struct for re-adding with new name
+        let add_user = AddUser {
+            server_port: user.server_port as u16,
+            users: vec![shadowsocks::manager::protocol::ServerUserConfig {
+                name: req.name.clone(), // Use the new name
+                password: user.key.clone(),
+            }],
+        };
+        // Add the user back with the new name, the addu domain command adds the user to the db
+        // and the UserManager config
+        let add_command = DomainCommand::new(&format!("addu:{}", add_user));
+        let (status, response) = send_command(&state, add_command, COMMAND_TIMEOUT_SECS).await;
+        if status != StatusCode::OK {
+            error!("Failed to add user back to ss-manager during rename: {}", response);
+            return (
+                status,
+                json_api_message(false,format!("Failed to add user with new name: {}", response))
+            );
+        }
+
+        // If service update succeeded, update the database
+        match db.rename_user(id.parse().unwrap(), &req.name) {
+            Ok(_) => (
+                StatusCode::OK,
+                json_api_message(true,format!("Renamed access key from {:?} to {:?}", old_name, req.name))
+            ),
+            Err(e) => {
+                error!("Database error when renaming user: {}", e);
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    json_api_message(false,format!("Failed to update database: {}", e))
+                )
+            }
+        }
     }
 
     // Create router
@@ -434,7 +465,6 @@ pub async fn run_web_service(
         // .route("/metrics/transfer", get(get_metrics))
         .with_state(state);
 
-    // let addr = format!("{}:{}", host_name, url_key);
     let listener = tokio::net::TcpListener::bind(host_name.clone())
         .await
         .expect(&format!("Failed to bind to {}", host_name));
@@ -530,24 +560,22 @@ pub trait IntoApiError {
     #[allow(dead_code)]
     fn into_api_error(self) -> ApiError;
 }
-// Implementation for std::io::Error
 impl IntoApiError for std::io::Error {
     fn into_api_error(self) -> ApiError {
         ApiError::SocketConnectionFailed(self)
     }
 }
-// Implementation for String
 impl IntoApiError for String {
     fn into_api_error(self) -> ApiError {
         ApiError::InternalError(self)
     }
 }
-// Implementation for &str
 impl IntoApiError for &str {
     fn into_api_error(self) -> ApiError {
         ApiError::InternalError(self.to_string())
     }
 }
+
 #[derive(Debug, Serialize)]
 struct AccessKeyListResponse {
     access_keys: Vec<AccessKey>,
@@ -563,7 +591,6 @@ struct AccessKey {
     #[serde(skip_serializing_if = "Option::is_none")]
     access_url: Option<String>,
 }
-// Add new REST API handlers
 
 async fn create_access_key(State(state): State<AppState>) -> impl IntoResponse {
     let mut db = state.db.lock().await;
@@ -634,7 +661,6 @@ async fn create_access_key(State(state): State<AppState>) -> impl IntoResponse {
 }
 
 async fn list_access_keys(State(state): State<AppState>) -> impl IntoResponse {
-    debug!("List access keys....");
     let db = state.db.lock().await;
 
     let users = db
@@ -669,31 +695,20 @@ async fn generate_ssurl_handler(State(state): State<AppState>, user_id: Option<A
             &params.password,
             params.name.as_deref(),
         ) {
-            Ok(url) => (
+            Ok(_) => (
                 StatusCode::OK,
-                Json(ApiResponse {
-                    success: true,
-                    message: "SS URL generated successfully".to_string(),
-                    data: Some(url),
-                }),
+                json_api_message(true, "SS URL generated successfully".to_string())
+
             ),
             Err(err) => (
                 StatusCode::BAD_REQUEST,
-                Json(ApiResponse {
-                    success: false,
-                    message: err.to_string(),
-                    data: None,
-                }),
+                json_api_message(false, err.to_string())
             ),
         }
     } else {
         (
             StatusCode::BAD_REQUEST,
-            Json(ApiResponse {
-                success: false,
-                message: "Missing UserID".to_string(),
-                data: None,
-            }),
+            json_api_message(false, "Missing UserID".to_string())
         )
     }
 }
@@ -701,11 +716,7 @@ async fn generate_ssurl_handler(State(state): State<AppState>, user_id: Option<A
 async fn health_check() -> impl IntoResponse {
     (
         StatusCode::OK,
-        Json(ApiResponse {
-            success: true,
-            message: "Service is healthy".to_string(),
-            data: None,
-        }),
+        json_api_message(true, "Service is healthy".to_string())
     )
 }
 
@@ -717,42 +728,26 @@ async fn generate_cipher_key(method: Option<AxPath<String>>) -> impl IntoRespons
     let method = method.map(|m| m.0).unwrap_or_else(|| DEFAULT_CIPHER_METHOD.to_string());
 
     match generate_key(&method) {
-        Ok(key) => (
+        Ok(_) => (
             StatusCode::OK,
-            Json(ApiResponse {
-                success: true,
-                message: format!("Key generated successfully using method: {}", method),
-                data: Some(key),
-            }),
+            json_api_message(true, format!("Key generated successfully using method: {}", method))
         ),
         Err(err) => (
             StatusCode::BAD_REQUEST,
-            Json(ApiResponse {
-                success: false,
-                message: err.to_string(),
-                data: None,
-            }),
+            json_api_message(false, err.to_string())
         ),
     }
 }
 async fn generate_cipher_key_post(Json(payload): Json<GenerateKeyRequest>) -> impl IntoResponse {
     let method = payload.method.as_deref().unwrap_or(DEFAULT_CIPHER_METHOD);
     match generate_key(method) {
-        Ok(key) => (
+        Ok(_) => (
             StatusCode::OK,
-            Json(ApiResponse {
-                success: true,
-                message: format!("Key generated successfully using method: {}", method),
-                data: Some(key),
-            }),
+            json_api_message(true, format!("Key generated successfully using method: {}", method))
         ),
         Err(err) => (
             StatusCode::BAD_REQUEST,
-            Json(ApiResponse {
-                success: false,
-                message: err.to_string(),
-                data: None,
-            }),
+            json_api_message(false, err.to_string())
         ),
     }
 }

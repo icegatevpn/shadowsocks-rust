@@ -1,14 +1,7 @@
-use std::fmt;
 use std::path::{PathBuf};
 use tokio::net::UnixDatagram;
 use async_channel::Receiver;
-use clap::command;
 use log::debug;
-use qrcode::bits::Bits;
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use serde::__private::de;
-use serde::de::{MapAccess, Visitor};
-use serde::ser::SerializeStruct;
 use tracing::error;
 use uuid::Uuid;
 use shadowsocks_service::shadowsocks::manager::domain_command::DomainCommand;

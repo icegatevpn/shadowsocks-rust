@@ -3,7 +3,6 @@
 #[cfg(unix)]
 use std::path::PathBuf;
 use std::{collections::HashMap, io, net::SocketAddr, sync::Arc, time::Duration};
-use std::ops::Deref;
 use bytes::Bytes;
 use log::{error, info, trace, warn, debug};
 use shadowsocks::{
@@ -29,7 +28,6 @@ use shadowsocks::manager::protocol::{AddUserRequest, AddUserResponse, CommandRes
 use crate::{
     acl::AccessControl,
     config::{ManagerConfig, ManagerServerHost, ManagerServerMode, SecurityConfig},
-    me_debug,
     net::FlowStat,
     server::ServerBuilder};
 use crate::mysql_db::Database;
@@ -224,7 +222,7 @@ impl Manager {
 
             match req {
                 ManagerRequest::Command(ref req) => {
-                    warn!("received a manager command: {:?}", req);
+                    debug!("received a manager command: {:?}", req);
                     let uuid = req.id;
                     let response = match req.command.as_deref() {
                         Some("list") => {
@@ -234,15 +232,29 @@ impl Manager {
                             String::from_utf8(self.handle_ping().await.to_bytes()?)
                         }
                         Some(thing) => {
-                            // todo, check thing, and do stuff
-                            if(thing.starts_with("removeu")){
+                            // Handle removeu config object
+                            if thing.starts_with("removeu") {
                                 let parts = thing.split(":").collect::<Vec<&str>>();
                                 let key = parts[1].trim();
-                                let ru = RemoveUserRequest{key: key.to_owned()};
+                                let ru = RemoveUserRequest { key: key.to_owned() };
                                 let response = self.handle_remove_user(&ru).await?;
                                 debug!("received remove user response: {:?}", response);
                                 String::from_utf8(response.to_bytes()?)
+                            // Handle addu config object
+                            } else if thing.starts_with("addu")  {
+                                // let parts = thing.split(":").collect::<Vec<&str>>();
+                                if let Some((_, config)) = thing.split_once(':') {
+                                    let config = serde_json::from_slice(config.as_bytes())?;
+                                    let au = AddUserRequest { config };
+                                    let response = self.handle_add_user(&au).await?;
+                                    debug!("received add user response: {:?}", response);
+                                    String::from_utf8(response.to_bytes()?)
+                                } else {
+                                    warn!("Failed to split addu command: {}", thing);
+                                    Ok(format!("Not implemented for {}", thing))
+                                }
                             } else {
+                                warn!("received unrecognized command: {}", thing);
                                 Ok(format!("Not implemented for {}", thing))
                             }
                         }
@@ -250,7 +262,7 @@ impl Manager {
                             Ok("Not implemented".to_string())
                         }
                     };
-                    let res_str = response.map_err(|e|"Error ???").unwrap();
+                    let res_str = response.map_err(|_|"Error ???").unwrap();
                     let response = DomainCommand::from_response(&res_str, uuid);
                     let resp = CommandResponse(response);
                     let _ = self.listener.send_to(&resp, &peer_addr).await;

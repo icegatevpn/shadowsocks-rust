@@ -7,7 +7,7 @@ use std::{
     string::ToString,
 };
 use std::fmt::{Display, Formatter};
-use log::{debug, error};
+use log::{error};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use bytes::BufMut;
@@ -263,8 +263,10 @@ impl ManagerProtocol for RemoveResponse {
 #[derive(Debug, Clone)]
 pub struct CommandResponse(pub DomainCommand);
 impl ManagerProtocol for CommandResponse {
-    fn from_bytes(buf: &[u8]) -> Result<Self, Error> {
-        Ok(CommandResponse::from_bytes(buf)?)
+    fn from_bytes(_: &[u8]) -> Result<Self, Error> {
+        // Ok(CommandResponse::from_bytes(buf)?)
+
+        unimplemented!("this aint done")
     }
 
     fn to_bytes(&self) -> Result<Vec<u8>, Error> {

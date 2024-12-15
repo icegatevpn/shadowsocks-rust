@@ -327,6 +327,10 @@ pub fn create(matches: &ArgMatches) -> Result<(Runtime, impl Future<Output = Exi
             .transpose()
             .expect("Failed to open database");
 
+        if database.is_none() {
+            return Err(crate::EXIT_CODE_LOAD_CONFIG_FAILURE.into());
+        }
+
         // Load config and handle database updates
         let mut config = match config_path_opt {
             Some(cpath) => {
@@ -584,13 +588,17 @@ pub fn create(matches: &ArgMatches) -> Result<(Runtime, impl Future<Output = Exi
             .host(),
         );
         let abort_signal = monitor::create_signal_monitor();
-        let db = database.unwrap();
 
+        // let mut db = match database {
+        //     Some(db) => Some(&mut Arc::new(Mutex::new(db))),
+        //     None => None
+        // };
+
+        let db = database.unwrap();
         let mut db = Arc::new(Mutex::new(db));
         // Clone the Arc for the web service
         let web_db = db.clone();
 
-        // let mut binding = db.lock().await;
         let server = run_manager(config, Some(&mut db));
 
         let url_key = generate_manager_key().expect("Failed to generate URL key!");

@@ -2,7 +2,7 @@
 
 use std::{io, net::SocketAddr, sync::Arc};
 use arc_swap::{ArcSwap, ArcSwapAny};
-use log::{debug, warn};
+use log::{debug};
 use once_cell::sync::Lazy;
 use tokio::{
     io::{AsyncRead, AsyncWrite},

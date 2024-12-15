@@ -1,9 +1,6 @@
 use std::fmt;
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use serde::de::{MapAccess, Visitor, Error};
-use serde::ser::SerializeStruct;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-use crate::manager::protocol::ManagerProtocol;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DomainCommand {

@@ -2,7 +2,7 @@
 
 use std::{io, net::SocketAddr, sync::Arc};
 use arc_swap::{ArcSwap, ArcSwapAny};
-use log::{debug, trace};
+use log::{debug};
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::task::JoinHandle;
 use shadowsocks::{
