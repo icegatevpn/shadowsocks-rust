@@ -7,10 +7,11 @@ use std::{
     string::ToString,
 };
 use std::fmt::{Display, Formatter};
-use log::error;
+use log::{debug, error};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use bytes::BufMut;
+use crate::manager::domain_command::DomainCommand;
 
 /// Abstract Manager Protocol
 pub trait ManagerProtocol: Sized {
@@ -259,6 +260,20 @@ impl ManagerProtocol for RemoveResponse {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct CommandResponse(pub DomainCommand);
+impl ManagerProtocol for CommandResponse {
+    fn from_bytes(buf: &[u8]) -> Result<Self, Error> {
+        Ok(CommandResponse::from_bytes(buf)?)
+    }
+
+    fn to_bytes(&self) -> Result<Vec<u8>, Error> {
+        let mut buf = self.0.to_bytes()?;
+        buf.push(b'\n');
+        Ok(buf)
+    }
+}
+
 /// `list` request
 #[derive(Debug, Clone)]
 pub struct ListRequest;
@@ -411,6 +426,7 @@ pub enum ManagerRequest {
     Stat(StatRequest),
     AddUser(AddUserRequest),
     RemoveUser(RemoveUserRequest),
+    Command(DomainCommand)
 }
 
 impl ManagerRequest {
@@ -424,6 +440,7 @@ impl ManagerRequest {
             ManagerRequest::Stat(..) => "stat",
             ManagerRequest::AddUser(..) => "addu",
             ManagerRequest::RemoveUser(..) => "removeu",
+            ManagerRequest::Command(..) => "{ command",
         }
     }
 }
@@ -433,6 +450,12 @@ impl ManagerProtocol for ManagerRequest {
         let mut nsplit = buf.splitn(2, |b| *b == b':');
         let cmd = nsplit.next().expect("first element shouldn't be None");
         match str::from_utf8(cmd)?.trim() {
+            "{\"command\""=> {
+                let dc = DomainCommand::from_bytes(buf);
+                Ok(ManagerRequest::Command(dc?))
+                // let stt = format!("<< Got command, not sure what to do: {}",dc?);
+                // Err(Error::UnrecognizedCommand(stt))
+            }
             "add" => match nsplit.next() {
                 None => Err(Error::MissingParameter),
                 Some(param) => {
@@ -496,6 +519,8 @@ impl ManagerProtocol for ManagerRequest {
             ManagerRequest::Stat(ref req) => req.to_bytes(),
             ManagerRequest::AddUser(ref req) => req.to_bytes(),
             ManagerRequest::RemoveUser(ref req) => req.to_bytes(),
+            ManagerRequest::Command(ref req) => req.to_bytes()
+                .map_err(|e|Error::JsonError(e.into()))
         }
     }
 }

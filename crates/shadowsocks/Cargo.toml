@@ -94,6 +94,7 @@ notify = { version = "7.0", optional = true }
 aes = { version = "0.8", optional = true }
 blake3 = "1.5"
 shadowsocks-crypto = { version = "0.5.8", default-features = false }
+uuid = { version = "1.11.0", features = ["v4"] }
 
 # this was all removed, not sure why...
 #[target.'cfg(any(target_arch = "x86_64", target_arch = "aarch64"))'.dependencies]

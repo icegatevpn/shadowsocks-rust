@@ -248,7 +248,7 @@ futures = "0.3"
 tokio = { version = "1", features = ["rt", "signal", "macros", "signal"] }
 # Web server
 axum = "0.7"
-uuid = { version = "1.0", features = ["v4"] }
+uuid = { version = "1.0", features = ["v4", "serde"] }
 async-channel = "2.3.1"
 
 ipnet = { version = "2.10", optional = true }
@@ -264,6 +264,7 @@ shadowsocks-service = { version = "1.22.0", path = "./crates/shadowsocks-service
 windows-service = { version = "0.7", optional = true }
 chrono = "0.4.38"
 serde_json = "1.0"
+bincode = "2.0.0-rc.3"
 
 [target.'cfg(unix)'.dependencies]
 daemonize = "0.5"

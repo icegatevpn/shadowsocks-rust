@@ -3,6 +3,7 @@
 #[cfg(unix)]
 use std::path::PathBuf;
 use std::{collections::HashMap, io, net::SocketAddr, sync::Arc, time::Duration};
+use std::ops::Deref;
 use bytes::Bytes;
 use log::{error, info, trace, warn, debug};
 use shadowsocks::{
@@ -23,7 +24,8 @@ use shadowsocks::{
 };
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::{sync::Mutex, task::JoinHandle, time};
-use shadowsocks::manager::protocol::{AddUserRequest, AddUserResponse, RemoveUserRequest, RemoveUserResponse};
+use shadowsocks::manager::domain_command::DomainCommand;
+use shadowsocks::manager::protocol::{AddUserRequest, AddUserResponse, CommandResponse, ManagerProtocol, RemoveUserRequest, RemoveUserResponse};
 use crate::{
     acl::AccessControl,
     config::{ManagerConfig, ManagerServerHost, ManagerServerMode, SecurityConfig},
@@ -221,6 +223,38 @@ impl Manager {
             debug!("received {:?} from {:?}", req, peer_addr);
 
             match req {
+                ManagerRequest::Command(ref req) => {
+                    warn!("received a manager command: {:?}", req);
+                    let uuid = req.id;
+                    let response = match req.command.as_deref() {
+                        Some("list") => {
+                            String::from_utf8(self.handle_list().await.to_bytes()?)
+                        }
+                        Some("ping") => {
+                            String::from_utf8(self.handle_ping().await.to_bytes()?)
+                        }
+                        Some(thing) => {
+                            // todo, check thing, and do stuff
+                            if(thing.starts_with("removeu")){
+                                let parts = thing.split(":").collect::<Vec<&str>>();
+                                let key = parts[1].trim();
+                                let ru = RemoveUserRequest{key: key.to_owned()};
+                                let response = self.handle_remove_user(&ru).await?;
+                                debug!("received remove user response: {:?}", response);
+                                String::from_utf8(response.to_bytes()?)
+                            } else {
+                                Ok(format!("Not implemented for {}", thing))
+                            }
+                        }
+                        None => {
+                            Ok("Not implemented".to_string())
+                        }
+                    };
+                    let res_str = response.map_err(|e|"Error ???").unwrap();
+                    let response = DomainCommand::from_response(&res_str, uuid);
+                    let resp = CommandResponse(response);
+                    let _ = self.listener.send_to(&resp, &peer_addr).await;
+                }
                 ManagerRequest::Add(ref req) => match self.handle_add(req).await {
                     Ok(rsp) => {
                         let _ = self.listener.send_to(&rsp, &peer_addr).await;
@@ -273,10 +307,10 @@ impl Manager {
 
                 ManagerRequest::RemoveUser(ref req) => match self.handle_remove_user(req).await {
                     Ok(r) => {
-                        debug!("removed user: {:?}", r);
+                        warn!("<<<<<< removed user: {:?}", r);
                     }
                     Err(e) => {
-                        warn!("removed user failed: {}", e);
+                        warn!("<<<<<< removed user failed: {}", e);
                     }
                 }
             }
@@ -297,22 +331,6 @@ impl Manager {
             },
         }
     }
-
-    // /// Add a user programmatically
-    // pub async fn add_users(&self, svr_cfg: ServerConfig) {
-    //     match self.svr_cfg.server_mode {
-    //         ManagerServerMode::Builtin => {
-    //             // todo: do stuff here!!
-    //             // debug!("<< built-in server mode >>");
-    //             // self.add_server_builtin(svr_cfg).await
-    //         },
-    //         #[cfg(unix)]
-    //         ManagerServerMode::Standalone => {
-    //             warn!("<< standalone server mode not implemented for add users >>");
-    //             // Not Implemented!
-    //         },
-    //     }
-    // }
 
     async fn add_server_builtin(&self, svr_cfg: ServerConfig) {
         // Each server should use a separate Context, but shares
@@ -344,9 +362,7 @@ impl Manager {
         server_builder.set_security_config(&self.security);
 
         let server_port = server_builder.server_config().addr().port();
-
         let mut servers = self.servers.lock().await;
-        // let mut sss = servers.get(&server_port);
         match servers.get(&server_port) {
             Some(sss) => {
                 match &sss.mode {
@@ -375,7 +391,10 @@ impl Manager {
         }
 
         let flow_stat = server_builder.flow_stat();
-        let (server, (tcp_user_sender, udp_user_sender)) = match server_builder.build().await {
+        let (server, (
+            tcp_user_sender,
+            udp_user_sender
+        )) = match server_builder.build().await {
             Ok(s) => s,
             Err(err) => {
                 error!("failed to start server ({}), error: {}", svr_cfg.addr(), err);
@@ -395,7 +414,6 @@ impl Manager {
                 sender.send(um.to_owned()).unwrap();
             }
         }
-
 
         servers.insert(
             server_port,
@@ -636,7 +654,6 @@ impl Manager {
     async fn handle_add_user(&self, req: &AddUserRequest) -> io::Result<AddUserResponse> {
         let new_config = &req.config;
         let port  = new_config.server_port;
-        debug!("<<<< handle add user: {:?}", new_config);
         if let Some(mut existing_config) =self.get_config(port).await {
             match ServerUserManager::user_manager_with_users(&new_config.users) {
                 Ok(mut new_manager) => {

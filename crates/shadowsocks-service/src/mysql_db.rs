@@ -736,7 +736,7 @@ impl Database {
              WHERE name = ?1 AND server_port = ?2",
         )?;
 
-        stmt.query_row(params![name, server_port], |row| self.get_user_from_row(row))
+        stmt.query_row(params![name, server_port], |row| self.build_user_from_row(row))
             .optional()
     }
     pub fn rename_user(&self, id: i64, new_name: &str) -> Result<usize, RusqliteError> {
@@ -763,13 +763,13 @@ impl Database {
         Ok(())
     }
 
-    pub fn remove_user(&mut self, id: i64) -> Result<String, RusqliteError> {
+    pub fn remove_user(&mut self, id: i64) -> Result<usize, RusqliteError> {
         let ss = self.conn.execute(
             "DELETE FROM users WHERE id = ?2",
             params![Utc::now().naive_utc(), id],
         )?;
 
-        Ok(format!("{} users deleted.", ss))
+        Ok(ss)
     }
 
     pub fn get_user_by_id(&self, id: i64) -> Result<Option<UserConfig>, RusqliteError> {
@@ -779,7 +779,7 @@ impl Database {
              WHERE id = ?1",
         )?;
 
-        stmt.query_row(params![id], |row| self.get_user_from_row(row))
+        stmt.query_row(params![id], |row| self.build_user_from_row(row))
             .optional()
     }
 
@@ -832,7 +832,7 @@ impl Database {
                     Ok(url) => Some(url),
                     Err(_) => Some("Error generating URL".to_string()),
                 };
-                Ok((self.get_user_from_row(row)?, (row.get::<usize, String>(8)?, url)))
+                Ok((self.build_user_from_row(row)?, (row.get::<usize, String>(8)?, url)))
             })?
             .collect::<Result<Vec<_>, _>>()?;
 
@@ -853,12 +853,12 @@ impl Database {
         let mut stmt = self.conn.prepare(query)?;
 
         let users = stmt
-            .query_map([], |row| self.get_user_from_row(row))?
+            .query_map([], |row| self.build_user_from_row(row))?
             .collect::<Result<Vec<_>, _>>()?;
 
         Ok(users)
     }
-    fn get_user_from_row(&self, row: &Row) -> Result<UserConfig, RusqliteError> {
+    fn build_user_from_row(&self, row: &Row) -> Result<UserConfig, RusqliteError> {
         Ok(UserConfig {
             id: Some(row.get(0)?),
             name: row.get(1)?,

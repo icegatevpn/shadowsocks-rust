@@ -1,13 +1,22 @@
+use std::fmt;
 use std::path::{PathBuf};
 use tokio::net::UnixDatagram;
 use async_channel::Receiver;
+use clap::command;
 use log::debug;
+use qrcode::bits::Bits;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde::__private::de;
+use serde::de::{MapAccess, Visitor};
+use serde::ser::SerializeStruct;
+use tracing::error;
 use uuid::Uuid;
+use shadowsocks_service::shadowsocks::manager::domain_command::DomainCommand;
 
 pub fn connect_domain_socket(
-    receiver: Receiver<String>,
+    receiver: Receiver<DomainCommand>,
     server_path: &str,
-) -> std::io::Result<Receiver<String>> {
+) -> std::io::Result<Receiver<DomainCommand>> {
     // Create a unique path for our client socket
     let client_path = format!("/tmp/ss-client-{}", Uuid::new_v4());
     let client_pathbuf = PathBuf::from(&client_path);
@@ -33,25 +42,34 @@ pub fn connect_domain_socket(
             // Handle incoming commands from the receiver
             match receiver.recv().await {
                 Ok(command) => {
-                    if let Err(e) = socket.send(command.as_bytes()).await {
+                    debug!("<<<< Received command: {:?}", command);
+                    if let Err(e) = socket.send(command.to_bytes()
+                        .expect("failed to parse command")
+                        .as_slice()).await {
                         eprintln!("Failed to send command: {}", e);
                         continue;
                     }
-
+                    debug!("<<<< Sent command ....");
                     // Wait for response
                     match socket.recv(&mut buf).await {
                         Ok(n) => {
                             if let Ok(response) = String::from_utf8(buf[..n].to_vec()) {
-                                debug!("Received response: {}", response);
-                                if response_tx.send(response).await.is_err() {
+                                let dm = DomainCommand::from_string(&response)
+                                    .expect(&format!("Failed to parse DomainCommand: {}", response));
+                                debug!("<<< Received response: {}", dm);
+                                if response_tx.send(dm).await.is_err() {
                                     break;
                                 }
                             }
                         }
                         Err(e) => eprintln!("Failed to receive response: {}", e),
                     }
+                    debug!("<<<< Got response!!");
                 }
-                Err(_) => break,
+                Err(e) => {
+                    error!("<<<< Failed to receive command: {}", e);
+                    break
+                },
             }
         }
 

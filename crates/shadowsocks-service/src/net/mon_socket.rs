@@ -2,6 +2,7 @@
 
 use std::{io, net::SocketAddr, sync::Arc};
 use arc_swap::{ArcSwap, ArcSwapAny};
+use log::{debug, trace};
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::task::JoinHandle;
 use shadowsocks::{
@@ -61,6 +62,7 @@ where
             loop {
                 let um = user_manager_rcv.recv().await;
                 if let Some(um) = um {
+                    debug!("UDP Received config from remote ...");
                     um_in.store(Arc::new(um));
                 }
             }

@@ -1,4 +1,5 @@
-use crate::service::domain_connection::connect_domain_socket;
+use crate::service::domain_connection::{connect_domain_socket};
+use shadowsocks::manager::domain_command::DomainCommand;
 use crate::service::key_generator::generate_key;
 use async_channel::{unbounded, Receiver, Sender};
 use axum::extract::{Path as AxPath, Path};
@@ -21,6 +22,8 @@ use tokio::{
     sync::{oneshot, Mutex},
     time::{timeout, Duration},
 };
+use uuid::Uuid;
+use shadowsocks_service::config::ManagerServerHost::Domain;
 
 #[derive(Debug, Deserialize)]
 struct ManagerCommand {
@@ -56,18 +59,18 @@ struct GenerateKeyRequest {
 
 #[derive(Clone)]
 struct AppState {
-    command_tx: Sender<(String, String)>,
-    pending_requests: Arc<Mutex<HashMap<String, oneshot::Sender<String>>>>,
+    command_tx: Sender<(DomainCommand)>,
+    pending_requests: Arc<Mutex<HashMap<Uuid, oneshot::Sender<String>>>>,
     db: Arc<Mutex<Database>>,
 }
 
 async fn socket_listener(
     socket_path: String,
-    command_rx: Receiver<(String, String)>,
-    pending_requests: Arc<Mutex<HashMap<String, oneshot::Sender<String>>>>,
+    command_rx: Receiver<(DomainCommand)>,
+    pending_requests: Arc<Mutex<HashMap<Uuid, oneshot::Sender<String>>>>,
 ) {
-    let mut from_socket: Option<Receiver<String>> = None;
-    let mut socket_sender: Option<Sender<String>> = None;
+    let mut from_socket: Option<Receiver<DomainCommand>> = None;
+    let mut socket_sender: Option<Sender<DomainCommand>> = None;
 
     while from_socket.is_none() {
         let (to_domain, domain_receiver) = unbounded();
@@ -82,19 +85,20 @@ async fn socket_listener(
             }
         }
     }
-    debug!("Domain connection established for {:?}", socket_path);
+    debug!(" <<<<<< Domain connection established for {:?}", socket_path);
     let socket_receiver = from_socket.unwrap();
     let sender = socket_sender.unwrap();
 
     tokio::spawn({
         let pending_requests = pending_requests.clone();
         async move {
-            while let Ok((command, command_id)) = command_rx.recv().await {
-                if let Err(e) = sender.send(command).await {
+            while let Ok((command)) = command_rx.recv().await {
+                debug!("Sending command to socket: {:?}", &command.command);
+                if let Err(e) = sender.send(command.clone()).await {
                     error!("Failed to send command to socket: {}", e);
                     // Clean up the pending request if send fails
                     let mut requests = pending_requests.lock().await;
-                    if let Some(response_sender) = requests.remove(&command_id) {
+                    if let Some(response_sender) = requests.remove(&command.id) {
                         let _ = response_sender.send("Failed to send command to socket".to_string());
                     }
                 }
@@ -105,14 +109,14 @@ async fn socket_listener(
     // Spawn response handler
     tokio::spawn(async move {
         while let Ok(response) = socket_receiver.recv().await {
-            let command_id = "ONE".to_string();
-            let response_data = response;
 
             let mut requests = pending_requests.lock().await;
-            if let Some(sender) = requests.remove(&command_id) {
-                if sender.send(response_data).is_err() {
+            if let Some(sender) = requests.remove(&response.id) {
+                if sender.send(response.response.unwrap_or("Error".to_string())).is_err() {
                     error!("Failed to send response to request handler");
                 }
+            } else {
+                error!("no pending requests to listen for!!!");
             }
         }
     });
@@ -122,15 +126,18 @@ async fn handle_command(State(state): State<AppState>, Json(payload): Json<Manag
     let (response_tx, response_rx) = oneshot::channel();
     // This is just a placeholder for a possible uuid to send to the socket and
     // monitor for the return uuid. That would require additional work on the socket
-    let command_id = "ONE".to_string();
+    // new DomainCommand
+
+
+    let command = DomainCommand::new(&payload.command);//Uuid::new_v4();
 
     // Store the response channel
     {
         let mut pending_requests = state.pending_requests.lock().await;
-        pending_requests.insert(command_id.clone(), response_tx);
+        pending_requests.insert(command.id, response_tx);
     }
 
-    match state.command_tx.send((payload.command, command_id.clone())).await {
+    match state.command_tx.send(command).await {
         Ok(_) => match timeout(Duration::from_secs(COMMAND_TIMEOUT_SECS), response_rx).await {
             Ok(Ok(response)) => (
                 StatusCode::OK,
@@ -168,22 +175,22 @@ async fn handle_command(State(state): State<AppState>, Json(payload): Json<Manag
     }
 }
 
-async fn send_command(state: &AppState, command: String, timeout_secs: u64) -> (StatusCode, String) {
+async fn send_command(state: &AppState, command: DomainCommand, timeout_secs: u64) -> (StatusCode, String) {
     let (response_tx, response_rx) = oneshot::channel();
-    let command_id = "ONE".to_string(); // = Uuid::new_v4().to_string();
+    // let command_id = "ONE".to_string(); // = Uuid::new_v4().to_string();
 
     // Store the response channel
     {
         let mut pending_requests = state.pending_requests.lock().await;
-        pending_requests.insert(command_id.clone(), response_tx);
+        pending_requests.insert(command.id, response_tx);
     }
-    info!("Sending command to socket {}", command);
-    let result = state.command_tx.send((command, command_id.clone())).await;
+    info!("Sending command to socket {:?}", command);
+    let result = state.command_tx.send(command.clone()).await;
 
     // Clean up callback on completion
     let cleanup = || async {
         let mut pending_requests = state.pending_requests.lock().await;
-        pending_requests.remove(&command_id);
+        pending_requests.remove(&command.id);
     };
 
     match result {
@@ -205,7 +212,7 @@ async fn send_command(state: &AppState, command: String, timeout_secs: u64) -> (
 }
 #[allow(dead_code)]
 async fn cmd_custom(State(state): State<AppState>, command: String) -> impl IntoResponse {
-    send_command(&state, command, COMMAND_TIMEOUT_SECS).await
+    send_command(&state, DomainCommand::new(&command), COMMAND_TIMEOUT_SECS).await
 }
 
 /* POST Body content with json like so:
@@ -215,29 +222,56 @@ async fn cmd_custom(State(state): State<AppState>, command: String) -> impl Into
 */
 async fn add_user(State(state): State<AppState>, command: String) -> impl IntoResponse {
     let config: AddUser = serde_json::from_str(&command).expect("json parse failed");
-    let new_command = format!("addu:{}", config);
+    let new_command = DomainCommand::new(&format!("addu:{}", config));
 
     debug!("Command: {:?}", new_command);
     send_command(&state, new_command, COMMAND_TIMEOUT_SECS).await
+}
+
+async fn remove_user(State(state): State<AppState>, key: Option<AxPath<String>>) -> impl IntoResponse {
+    debug!("remove user:: Command: {:?}", key);
+    let uid = key.map(|m| m.0).unwrap_or_else(|| DEFAULT_CIPHER_METHOD.to_string());
+    let db = state.db.lock().await;
+    let user = match db.get_user_by_id(uid.parse().unwrap()) {
+        Ok(Some(user)) => user,
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(format!("User with id {} not found", uid))
+            );
+        }
+        Err(e) => {
+            error!("Database error when fetching user: {}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(format!("Failed to fetch user: {}", e))
+            );
+        }
+    };
+    let new_command = DomainCommand::new(&format!("removeu:{}", user.key));
+
+    debug!("<<<<< Command: {:?}", new_command);
+    let (status, response) = send_command(&state, new_command, COMMAND_TIMEOUT_SECS).await;
+    (status, Json(response))
 }
 
 // Macro to generate command handler functions
 macro_rules! make_command_handler {
     ($name:ident, $cmd:expr) => {
         async fn $name(State(state): State<AppState>) -> impl IntoResponse {
-            send_command(&state, $cmd.to_string(), COMMAND_TIMEOUT_SECS).await
+            send_command(&state, DomainCommand::new(&$cmd.to_string()), COMMAND_TIMEOUT_SECS).await
         }
     };
     // Variant with custom timeout
     ($name:ident, $cmd:expr, $timeout:expr) => {
         async fn $name(State(state): State<AppState>) -> impl IntoResponse {
-            send_command(&state, $cmd.to_string(), $timeout).await
+            send_command(&state, DomainCommand(&$cmd.to_string()), $timeout).await
         }
     };
 }
 
-make_command_handler!(cmd_list, "list");
-make_command_handler!(cmd_ping, "ping");
+make_command_handler!(cmd_list, &"list");
+make_command_handler!(cmd_ping, &"ping");
 
 pub async fn run_web_service(
     manager_socket_path: String,
@@ -245,6 +279,7 @@ pub async fn run_web_service(
     url_key: String,
     db: Arc<Mutex<Database>>,
 ) {
+    let url_key = "".to_string();
     // Create channel for commands
     let (command_tx, command_rx) = unbounded();
     let pending_requests = Arc::new(Mutex::new(HashMap::new()));
@@ -284,10 +319,72 @@ pub async fn run_web_service(
         )
     }
 
+    // async fn remove_access_key(State(state): State<AppState>, Path(id): Path<String>) -> impl IntoResponse {
+    //     let mut db = state.db.lock().await;
+    //     let num_users = db.remove_user(id.parse().unwrap()).expect("Failed to remove user");
+    //     (StatusCode::OK, num_users)
+    // }
     async fn remove_access_key(State(state): State<AppState>, Path(id): Path<String>) -> impl IntoResponse {
         let mut db = state.db.lock().await;
-        let num_users = db.remove_user(id.parse().unwrap()).expect("Failed to remove user");
-        (StatusCode::OK, num_users)
+
+        // First get the user details before removal
+        let user = match db.get_user_by_id(id.parse().unwrap()) {
+            Ok(Some(user)) => user,
+            Ok(None) => {
+                return (
+                    StatusCode::NOT_FOUND,
+                    Json(format!("User with id {} not found", id))
+                );
+            }
+            Err(e) => {
+                error!("Database error when fetching user: {}", e);
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(format!("Failed to fetch user: {}", e))
+                );
+            }
+        };
+
+        // Format the remove user command for the socket
+        let command = DomainCommand::new(&format!("removeu: {}\n", user.key));
+        debug!("Sending remove user command to socket: {}", command);
+
+        // Send command to socket and await response  // todo, this failed!!
+        let (status, response) = send_command(&state, command, COMMAND_TIMEOUT_SECS).await;
+
+        if status != StatusCode::OK {
+            error!("Failed to remove user from ss-manager: {}", response);
+            return (
+                status,
+                Json(format!("Failed to remove user from ss-manager: {}", response))
+            );
+        }
+
+        // If socket removal was successful, remove from database
+        match db.remove_user(id.parse().unwrap()) {
+            Ok(affected_rows) => {
+                if affected_rows > 0 {
+                    (
+                        StatusCode::OK,
+                        Json(format!("User successfully removed from both ss-manager and database"))
+                    )
+                } else {
+                    (
+                        StatusCode::NOT_FOUND,
+                        Json(format!("User not found in database"))
+                    )
+                }
+            }
+            Err(e) => {
+                error!("Failed to remove user from database: {}", e);
+                // Note: At this point the user has been removed from ss-manager but not from the database
+                // You might want to add some reconciliation logic here
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(format!("Failed to remove user from database: {}", e))
+                )
+            }
+        }
     }
 
     // todo: maybe future usage
@@ -322,6 +419,7 @@ pub async fn run_web_service(
         .route(&format!("/{}/list", url_key), get(cmd_list))
         .route(&format!("/{}/ping", url_key), get(cmd_ping))
         .route(&format!("/{}/add_user", url_key), post(add_user))
+        .route(&format!("/{}/remove_user/:key", url_key), post(remove_user))
         .route(&format!("/{}/generate_key", url_key), post(generate_cipher_key_post))
         .route(&format!("/{}/generate_key", url_key), get(generate_cipher_key))
         .route(&format!("/{}/generate_key/:method", url_key), get(generate_cipher_key))
@@ -475,7 +573,7 @@ async fn create_access_key(State(state): State<AppState>) -> impl IntoResponse {
     let servers = db.list_servers(true).expect("Failed to list servers");
     let server = servers.first().expect("No server found");
 
-    // Create new user
+    // Create new user in database
     let (user, url) = db
         .add_user(
             format!("user_{}", chrono::Utc::now().timestamp()),
@@ -485,9 +583,43 @@ async fn create_access_key(State(state): State<AppState>) -> impl IntoResponse {
         )
         .expect("failed to add New User");
 
-    
-    // todo add new user to server config!!  (socket command addu ?????)
+    // Create AddUser struct for socket communication
+    let add_user = AddUser {
+        server_port: server.port as u16,
+        users: vec![shadowsocks::manager::protocol::ServerUserConfig {
+            name: user.name.clone(),
+            password: user.key.clone(),
+        }],
+    };
 
+    // Convert AddUser to string command format
+    let command = DomainCommand::new(&format!("addu:{}", add_user));
+    debug!("Sending add user command to socket: {}", command);
+
+    // Send command to socket and await response
+    let (status, response) = send_command(&state, command, COMMAND_TIMEOUT_SECS).await;
+
+    if status != StatusCode::OK {
+        error!("Failed to add user to ss-manager: {}", response);
+        // Rollback database changes if socket communication failed
+        if let Err(err) = db.remove_user(user.id.unwrap()) {
+            error!("Failed to rollback user creation: {}", err);
+        }
+        // Return error with same type structure as success case
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(AccessKey {
+                id: None,
+                name: None,
+                password: None,
+                port: None,
+                method: None,
+                access_url: None,
+            }),
+        );
+    }
+
+    // Return successful response
     (
         StatusCode::OK,
         Json(AccessKey {
@@ -500,8 +632,8 @@ async fn create_access_key(State(state): State<AppState>) -> impl IntoResponse {
         }),
     )
 }
+
 async fn list_access_keys(State(state): State<AppState>) -> impl IntoResponse {
-    //Result<Json<AccessKeyListResponse>> {
     debug!("List access keys....");
     let db = state.db.lock().await;
 

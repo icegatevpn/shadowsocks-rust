@@ -47,7 +47,7 @@ impl ProxyListener {
             loop {
                 let um = user_manager_rcv.recv().await;
                 if let Some(um) = um {
-                    debug!("Received config from remote {:?}", um);
+                    debug!("TCP Received config from remote ...");
                     um_in.store(Arc::new(um));
                 }
             }
