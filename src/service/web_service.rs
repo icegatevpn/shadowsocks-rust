@@ -1,5 +1,4 @@
-use crate::service::domain_connection::{connect_domain_socket};
-use shadowsocks::manager::domain_command::DomainCommand;
+use crate::service::domain_connection::connect_domain_socket;
 use crate::service::key_generator::generate_key;
 use async_channel::{unbounded, Receiver, Sender};
 use axum::extract::{Path as AxPath, Path};
@@ -13,6 +12,7 @@ use axum::{
 };
 use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
+use shadowsocks::manager::domain_command::DomainCommand;
 use shadowsocks::manager::protocol::AddUser;
 use shadowsocks_service::mysql_db::Database;
 use shadowsocks_service::shadowsocks;
@@ -39,6 +39,10 @@ struct ApiResponse {
 #[derive(Debug, Deserialize)]
 struct RenameRequest {
     name: String,
+}
+#[derive(Debug, Deserialize)]
+struct CreateAccessKeyRequest {
+    name: Option<String>,
 }
 
 // todo: maybe future usage
@@ -73,7 +77,7 @@ async fn socket_listener(
 
     while from_socket.is_none() {
         let (to_domain, domain_receiver) = unbounded();
-        match connect_domain_socket(domain_receiver, &socket_path) {
+        match connect_domain_socket(domain_receiver, &socket_path).await {
             Ok(ds) => {
                 from_socket = Some(ds);
                 socket_sender = Some(to_domain)
@@ -108,7 +112,6 @@ async fn socket_listener(
     // Spawn response handler
     tokio::spawn(async move {
         while let Ok(response) = socket_receiver.recv().await {
-
             let mut requests = pending_requests.lock().await;
             if let Some(sender) = requests.remove(&response.id) {
                 if sender.send(response.response.unwrap_or("Error".to_string())).is_err() {
@@ -135,20 +138,23 @@ async fn handle_command(State(state): State<AppState>, Json(payload): Json<Manag
         Ok(_) => match timeout(Duration::from_secs(COMMAND_TIMEOUT_SECS), response_rx).await {
             Ok(Ok(_)) => (
                 StatusCode::OK,
-                json_api_message(true, "Command executed successfully".to_string())
+                json_api_message(true, "Command executed successfully".to_string()),
             ),
             Ok(Err(_)) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                json_api_message(false, "Response channel closed".to_string())
+                json_api_message(false, "Response channel closed".to_string()),
             ),
             Err(_) => (
                 StatusCode::GATEWAY_TIMEOUT,
-                json_api_message(false, format!("Timeout waiting for response after {} seconds", COMMAND_TIMEOUT_SECS))
+                json_api_message(
+                    false,
+                    format!("Timeout waiting for response after {} seconds", COMMAND_TIMEOUT_SECS),
+                ),
             ),
         },
         Err(_) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            json_api_message(false, "Failed to send command to socket listener".to_string())
+            json_api_message(false, "Failed to send command to socket listener".to_string()),
         ),
     }
 }
@@ -169,12 +175,10 @@ async fn send_command(state: &AppState, command: DomainCommand, timeout_secs: u6
                 debug!("Received response from socket {:?}", response);
                 (StatusCode::OK, response)
             }
-            _ => {
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "Command failed or timed out".to_string(),
-                )
-            }
+            _ => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Command failed or timed out".to_string(),
+            ),
         },
         Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "Failed to send command".to_string()),
     }
@@ -205,16 +209,13 @@ async fn remove_user(State(state): State<AppState>, key: Option<AxPath<String>>)
     let user = match db.get_user_by_id(uid.parse().unwrap()) {
         Ok(Some(user)) => user,
         Ok(None) => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(format!("User with id {} not found", uid))
-            );
+            return (StatusCode::NOT_FOUND, Json(format!("User with id {} not found", uid)));
         }
         Err(e) => {
             error!("Database error when fetching user: {}", e);
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(format!("Failed to fetch user: {}", e))
+                Json(format!("Failed to fetch user: {}", e)),
             );
         }
     };
@@ -230,7 +231,12 @@ async fn remove_user(State(state): State<AppState>, key: Option<AxPath<String>>)
 macro_rules! make_command_handler {
     ($name:ident, $cmd:expr) => {
         async fn $name(State(state): State<AppState>) -> impl IntoResponse {
-            send_command(&state, DomainCommand::new(&$cmd.to_string()), COMMAND_TIMEOUT_SECS).await
+            send_command(
+                &state,
+                DomainCommand::new(&$cmd.to_string()),
+                COMMAND_TIMEOUT_SECS,
+            )
+            .await
         }
     };
     // Variant with custom timeout
@@ -257,8 +263,11 @@ pub async fn run_web_service(
     random_url_key: String,
     db: Arc<Mutex<Database>>,
 ) {
-    let url_key =  if cfg!(debug_assertions) { "debug".to_string() }
-    else { random_url_key.clone() };
+    let url_key = if cfg!(debug_assertions) {
+        "debug".to_string()
+    } else {
+        random_url_key.clone()
+    };
 
     // Create channel for commands
     let (command_tx, command_rx) = unbounded();
@@ -306,16 +315,13 @@ pub async fn run_web_service(
         let user = match db.get_user_by_id(id.parse().unwrap()) {
             Ok(Some(user)) => user,
             Ok(None) => {
-                return (
-                    StatusCode::NOT_FOUND,
-                    Json(format!("User with id {} not found", id))
-                );
+                return (StatusCode::NOT_FOUND, Json(format!("User with id {} not found", id)));
             }
             Err(e) => {
                 error!("Database error when fetching user: {}", e);
                 return (
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(format!("Failed to fetch user: {}", e))
+                    Json(format!("Failed to fetch user: {}", e)),
                 );
             }
         };
@@ -331,7 +337,7 @@ pub async fn run_web_service(
             error!("Failed to remove user from ss-manager: {}", response);
             return (
                 status,
-                Json(format!("Failed to remove user from ss-manager: {}", response))
+                Json(format!("Failed to remove user from ss-manager: {}", response)),
             );
         }
 
@@ -341,13 +347,10 @@ pub async fn run_web_service(
                 if affected_rows > 0 {
                     (
                         StatusCode::OK,
-                        Json(format!("User successfully removed from both ss-manager and database"))
+                        Json(format!("User successfully removed from both ss-manager and database")),
                     )
                 } else {
-                    (
-                        StatusCode::NOT_FOUND,
-                        Json(format!("User not found in database"))
-                    )
+                    (StatusCode::NOT_FOUND, Json(format!("User not found in database")))
                 }
             }
             Err(e) => {
@@ -356,7 +359,7 @@ pub async fn run_web_service(
                 // You might want to add some reconciliation logic here
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(format!("Failed to remove user from database: {}", e))
+                    Json(format!("Failed to remove user from database: {}", e)),
                 )
             }
         }
@@ -385,13 +388,17 @@ pub async fn run_web_service(
         let user = match db.get_user_by_id(id.parse().unwrap()) {
             Ok(Some(user)) => user,
             Ok(None) => {
-                return (StatusCode::NOT_FOUND,
-                        json_api_message(false, format!("User with id {} not found", id)))
+                return (
+                    StatusCode::NOT_FOUND,
+                    json_api_message(false, format!("User with id {} not found", id)),
+                )
             }
             Err(e) => {
                 error!("Database error when fetching user: {}", e);
-                return (StatusCode::INTERNAL_SERVER_ERROR,
-                        json_api_message(false, format!("Failed to fetch user: {}", e)))
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    json_api_message(false, format!("Failed to fetch user: {}", e)),
+                );
             }
         };
         let old_name = user.name.clone();
@@ -403,7 +410,10 @@ pub async fn run_web_service(
             error!("Failed to remove user from ss-manager during rename: {}", response);
             return (
                 status,
-                json_api_message(false, format!("Failed to remove existing user configuration: {}", response))
+                json_api_message(
+                    false,
+                    format!("Failed to remove existing user configuration: {}", response),
+                ),
             );
         }
         // Then Create AddUser struct for re-adding with new name
@@ -422,7 +432,7 @@ pub async fn run_web_service(
             error!("Failed to add user back to ss-manager during rename: {}", response);
             return (
                 status,
-                json_api_message(false,format!("Failed to add user with new name: {}", response))
+                json_api_message(false, format!("Failed to add user with new name: {}", response)),
             );
         }
 
@@ -430,13 +440,16 @@ pub async fn run_web_service(
         match db.rename_user(id.parse().unwrap(), &req.name) {
             Ok(_) => (
                 StatusCode::OK,
-                json_api_message(true,format!("Renamed access key from {:?} to {:?}", old_name, req.name))
+                json_api_message(
+                    true,
+                    format!("Renamed access key from {:?} to {:?}", old_name, req.name),
+                ),
             ),
             Err(e) => {
                 error!("Database error when renaming user: {}", e);
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    json_api_message(false,format!("Failed to update database: {}", e))
+                    json_api_message(false, format!("Failed to update database: {}", e)),
                 )
             }
         }
@@ -592,9 +605,17 @@ struct AccessKey {
     access_url: Option<String>,
 }
 
-async fn create_access_key(State(state): State<AppState>) -> impl IntoResponse {
+async fn create_access_key(
+    State(state): State<AppState>,
+    payload: Option<Json<CreateAccessKeyRequest>>,
+) -> impl IntoResponse {
     let mut db = state.db.lock().await;
 
+    // Get name from payload or generate default
+    let key_name = match payload {
+        Some(ref req) => &req.name.clone().unwrap_or_else(|| format!("user_{}", chrono::Utc::now().timestamp())),
+        None => &format!("user_{}", chrono::Utc::now().timestamp()),
+    };
     // Generate a random key
     let password = generate_key(DEFAULT_CIPHER_METHOD).expect("Failed to generate key");
     let servers = db.list_servers(true).expect("Failed to list servers");
@@ -603,7 +624,7 @@ async fn create_access_key(State(state): State<AppState>) -> impl IntoResponse {
     // Create new user in database
     let (user, url) = db
         .add_user(
-            format!("user_{}", chrono::Utc::now().timestamp()),
+            key_name.to_string(),
             password.clone(),
             server.port,
             true,
@@ -697,27 +718,20 @@ async fn generate_ssurl_handler(State(state): State<AppState>, user_id: Option<A
         ) {
             Ok(_) => (
                 StatusCode::OK,
-                json_api_message(true, "SS URL generated successfully".to_string())
-
+                json_api_message(true, "SS URL generated successfully".to_string()),
             ),
-            Err(err) => (
-                StatusCode::BAD_REQUEST,
-                json_api_message(false, err.to_string())
-            ),
+            Err(err) => (StatusCode::BAD_REQUEST, json_api_message(false, err.to_string())),
         }
     } else {
         (
             StatusCode::BAD_REQUEST,
-            json_api_message(false, "Missing UserID".to_string())
+            json_api_message(false, "Missing UserID".to_string()),
         )
     }
 }
 
 async fn health_check() -> impl IntoResponse {
-    (
-        StatusCode::OK,
-        json_api_message(true, "Service is healthy".to_string())
-    )
+    (StatusCode::OK, json_api_message(true, "Service is healthy".to_string()))
 }
 
 const DEFAULT_CIPHER_METHOD: &str = "2022-blake3-aes-256-gcm";
@@ -730,12 +744,9 @@ async fn generate_cipher_key(method: Option<AxPath<String>>) -> impl IntoRespons
     match generate_key(&method) {
         Ok(_) => (
             StatusCode::OK,
-            json_api_message(true, format!("Key generated successfully using method: {}", method))
+            json_api_message(true, format!("Key generated successfully using method: {}", method)),
         ),
-        Err(err) => (
-            StatusCode::BAD_REQUEST,
-            json_api_message(false, err.to_string())
-        ),
+        Err(err) => (StatusCode::BAD_REQUEST, json_api_message(false, err.to_string())),
     }
 }
 async fn generate_cipher_key_post(Json(payload): Json<GenerateKeyRequest>) -> impl IntoResponse {
@@ -743,11 +754,8 @@ async fn generate_cipher_key_post(Json(payload): Json<GenerateKeyRequest>) -> im
     match generate_key(method) {
         Ok(_) => (
             StatusCode::OK,
-            json_api_message(true, format!("Key generated successfully using method: {}", method))
+            json_api_message(true, format!("Key generated successfully using method: {}", method)),
         ),
-        Err(err) => (
-            StatusCode::BAD_REQUEST,
-            json_api_message(false, err.to_string())
-        ),
+        Err(err) => (StatusCode::BAD_REQUEST, json_api_message(false, err.to_string())),
     }
 }

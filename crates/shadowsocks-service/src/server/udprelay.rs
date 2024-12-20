@@ -243,7 +243,9 @@ impl UdpServer {
         };
 
         loop {
-            debug!("<< Still listening for user manager on UDPRelay: {:?}",listening.is_some());
+            if !listening.is_some() {
+                warn!("UDP User Manager receiver has stopped listening!");
+            }
             tokio::select! {
                 _ = cleanup_timer.tick() => {
                     // cleanup expired associations. iter() will remove expired elements

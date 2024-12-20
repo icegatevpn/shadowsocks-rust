@@ -370,12 +370,18 @@ pub fn create(matches: &ArgMatches) -> Result<(Runtime, impl Future<Output = Exi
                 cfg
             },
             None => {
+
                 match &database {
                     None => Config::new(ConfigType::Manager),
                     Some(db) => {
                         // Create base config with manager
                         let mut config = Config::new(ConfigType::Manager);
-                        config.manager = Some(ManagerConfig::new(ManagerAddr::UnixSocketAddr(SOCKET_PATH.into())));
+                        #[cfg(unix)]
+                        if cfg!(unix) {
+                            config.manager = Some(ManagerConfig::new(ManagerAddr::UnixSocketAddr(SOCKET_PATH.into())));
+                        } else {
+                            eprintln!("Socket command support for Non unix systems has not been implemented yet.");
+                        }
 
                         // Load any additional server configs from DB
                         match db.load_config_from_tables() {

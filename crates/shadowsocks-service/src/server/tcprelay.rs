@@ -74,8 +74,9 @@ impl TcpServer {
         };
 
         loop {
-
-            debug!("Still listening for user manager on TCPRelay: {:?}",listening.is_some());
+            if !listening.is_some() {
+                warn!("TCP User Manager receiver has stopped listening!");
+            }
             let flow_stat = self.context.flow_stat();
 
             let (local_stream, peer_addr) = match self

@@ -388,6 +388,7 @@ impl Manager {
                             time::sleep(Duration::from_millis(500)).await;
                         }
                     }
+                    #[cfg(unix)]
                     ServerInstanceMode::Standalone { .. } => {}
                 }
             }

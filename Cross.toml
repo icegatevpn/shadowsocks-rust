@@ -45,7 +45,31 @@ CARGO_TARGET_X86_64_LINUX_ANDROID_LINKER = "x86_64-linux-android-clang"
 CFLAGS = "-fPIC"
 
 [target.x86_64-unknown-linux-gnu]
+image = "ghcr.io/cross-rs/x86_64-pc-windows-gnu:latest"
+pre-build = [
+    "apt-get update",
+    "apt-get install -y libsqlite3-dev"
+]
+#pre-build = [
+#    # Install build dependencies including SQLite
+#    "apt-get update && apt-get install -y mingw-w64 mingw-w64-tools zip",
+#    # Download and extract SQLite amalgamation
+#    "curl -L 'https://www.sqlite.org/2024/sqlite-amalgamation-3450100.zip' -o sqlite.zip",
+#    "unzip sqlite.zip",
+#    "cd sqlite-amalgamation-3450100",
+#    # Compile SQLite for Windows
+#    "i686-w64-mingw32-gcc -c sqlite3.c -o sqlite3.o",
+#    "i686-w64-mingw32-ar rcs libsqlite3.a sqlite3.o",
+#    # Install to MinGW lib directory
+#    "cp libsqlite3.a /usr/i686-w64-mingw32/lib/"
+#]
+
+[target.x86_64-pc-windows-gnu]
 pre-build = ["apt-get update && apt-get install -y libsqlite3-dev"]
+
+[target.i686-pc-windows-gnu]
+image = "ghcr.io/cross-rs/i686-pc-windows-gnu:latest"
+# No pre-build needed now since SQLite is included in the Dockerfile
 
 CARGO_TARGET_X86_64_LINUX_ANDROID_LINKER = "x86_64-linux-android-clang"
 CFLAGS = "-fPIC"
