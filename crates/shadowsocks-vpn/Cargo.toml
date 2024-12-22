@@ -1,0 +1,30 @@
+[package]
+name = "shadowsocks-vpn"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "shadowsocks_vpn"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[dependencies]
+shadowsocks = { path = "../shadowsocks" }
+shadowsocks-service = { path = "../shadowsocks-service", features = ["local"] }
+tokio = { version = "1.38", features = ["full"] }
+futures = "0.3"
+thiserror = "2.0"
+log = "0.4"
+
+# Android-specific dependencies
+[target.'cfg(target_os = "android")'.dependencies]
+jni = { version = "0.21", default-features = false }
+android_logger = "0.13"
+ndk-context = "0.1"
+
+[features]
+default = ["aead-cipher-2022", "local"]
+local = ["shadowsocks-service/local"]
+stream-cipher = ["shadowsocks-service/stream-cipher"]
+aead-cipher = ["shadowsocks-service/aead-cipher"]
+aead-cipher-extra = ["shadowsocks-service/aead-cipher-extra"]
+aead-cipher-2022 = ["shadowsocks-service/aead-cipher-2022"]

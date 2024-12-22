@@ -213,6 +213,7 @@ smoltcp = { version = "0.12", optional = true, default-features = false, feature
 serde = { version = "1.0", features = ["derive"] }
 json5 = "0.4"
 bson = { version = "2.13.0", optional = true }
+#limbo = { git =  "https://github.com/tursodatabase/limbo", tag = "v0.0.10", package = "limbo_core"}
 rusqlite = { version = "0.32.1", features = ["chrono", "hooks"]}
 #tokio-rusqlite = "0.6.0"
 

@@ -45,7 +45,7 @@ path = "bin/sswinservice.rs"
 required-features = ["winservice"]
 
 [workspace]
-members = ["crates/shadowsocks", "crates/shadowsocks-service"]
+members = ["crates/shadowsocks", "crates/shadowsocks-service", "crates/shadowsocks-vpn"]
 
 [profile.release]
 lto = "fat"

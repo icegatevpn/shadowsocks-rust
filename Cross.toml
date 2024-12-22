@@ -15,12 +15,12 @@ passthrough = [
 ]
 
 # Common settings for all Android targets
-#[target.'cfg(target_os = "android")']
-#image = "ghcr.io/cross-rs/android:latest"
-#xargo = false
+[target.'cfg(target_os = "android")']
+CFLAGS = "-fPIC"
 
 # Architecture-specific configurations
 [target.aarch64-linux-android]
+## todo:: create my own image based from this
 image = "ghcr.io/cross-rs/aarch64-linux-android:latest"
 [target.aarch64-linux-android.env]
 CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER = "aarch64-linux-android-clang"
