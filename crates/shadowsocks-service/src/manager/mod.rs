@@ -12,7 +12,12 @@ use crate::{
     dns::build_dns_resolver,
     server::SERVER_DEFAULT_KEEPALIVE_TIMEOUT,
 };
+
+#[cfg(feature = "database")]
 use crate::mysql_db::Database;
+
+#[cfg(not(feature = "database"))]
+use crate::manager::server::Database;
 
 pub use self::server::{Manager, ManagerBuilder};
 

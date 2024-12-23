@@ -35,7 +35,9 @@ local = ["httparse"]
 # Enable remote server
 server = []
 # Enable manager server
-manager = ["server"]
+manager = ["server", "database"]
+
+database = ["rusqlite"]
 
 # Enables Hickory-DNS for replacing tokio's builtin DNS resolver
 hickory-dns = ["hickory-resolver", "shadowsocks/trust-dns"]
@@ -214,7 +216,7 @@ serde = { version = "1.0", features = ["derive"] }
 json5 = "0.4"
 bson = { version = "2.13.0", optional = true }
 #limbo = { git =  "https://github.com/tursodatabase/limbo", tag = "v0.0.10", package = "limbo_core"}
-rusqlite = { version = "0.32.1", features = ["chrono", "hooks"]}
+rusqlite = { version = "0.32.1", features = ["chrono", "hooks"], optional = true}
 #tokio-rusqlite = "0.6.0"
 
 shadowsocks = { version = "1.22.0", path = "../shadowsocks", default-features = false }

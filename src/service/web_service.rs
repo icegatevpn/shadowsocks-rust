@@ -14,6 +14,7 @@ use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
 use shadowsocks::manager::domain_command::DomainCommand;
 use shadowsocks::manager::protocol::AddUser;
+#[cfg(feature = "database")]
 use shadowsocks_service::mysql_db::Database;
 use shadowsocks_service::shadowsocks;
 use shadowsocks_service::url_generator::generate_ssurl;
@@ -64,6 +65,7 @@ struct GenerateKeyRequest {
 struct AppState {
     command_tx: Sender<DomainCommand>,
     pending_requests: Arc<Mutex<HashMap<Uuid, oneshot::Sender<String>>>>,
+    #[cfg(feature = "database")]
     db: Arc<Mutex<Database>>,
 }
 
@@ -202,6 +204,7 @@ async fn add_user(State(state): State<AppState>, command: String) -> impl IntoRe
     send_command(&state, new_command, COMMAND_TIMEOUT_SECS).await
 }
 
+#[cfg(feature = "database")]
 async fn remove_user(State(state): State<AppState>, key: Option<AxPath<String>>) -> impl IntoResponse {
     debug!("remove user:: Command: {:?}", key);
     let uid = key.map(|m| m.0).unwrap_or_else(|| DEFAULT_CIPHER_METHOD.to_string());
@@ -225,6 +228,10 @@ async fn remove_user(State(state): State<AppState>, key: Option<AxPath<String>>)
     let (status, response) = send_command(&state, new_command, COMMAND_TIMEOUT_SECS).await;
 
     (status, Json(response))
+}
+#[cfg(not(feature = "database"))]
+async fn remove_user(State(state): State<AppState>, key: Option<AxPath<String>>) -> impl IntoResponse {
+    warn!("remove_user, not implemented with no database");
 }
 
 // Macro to generate command handler functions
@@ -261,6 +268,7 @@ pub async fn run_web_service(
     manager_socket_path: String,
     host_name: String,
     random_url_key: String,
+    #[cfg(feature = "database")]
     db: Arc<Mutex<Database>>,
 ) {
     let url_key = if cfg!(debug_assertions) {
@@ -283,9 +291,11 @@ pub async fn run_web_service(
     let state = AppState {
         command_tx,
         pending_requests,
+        #[cfg(feature = "database")]
         db,
     };
 
+    #[cfg(feature = "database")]
     async fn get_access_key(State(state): State<AppState>, Path(id): Path<String>) -> impl IntoResponse {
         let db = state.db.lock().await;
         let user_and_url = db
@@ -307,7 +317,12 @@ pub async fn run_web_service(
             }),
         )
     }
+    #[cfg(not(feature = "database"))]
+    async fn get_access_key(State(_): State<AppState>, Path(_): Path<String>) -> impl IntoResponse {
+        warn!("get_access_key, not implemented with no database");
+    }
 
+    #[cfg(feature = "database")]
     async fn remove_access_key(State(state): State<AppState>, Path(id): Path<String>) -> impl IntoResponse {
         let mut db = state.db.lock().await;
 
@@ -364,6 +379,10 @@ pub async fn run_web_service(
             }
         }
     }
+    #[cfg(not(feature = "database"))]
+    async fn remove_access_key(State(state): State<AppState>, Path(id): Path<String>) -> impl IntoResponse {
+        warn!("remove_access_key, not implemented with no database");
+    }
 
     // todo: maybe future usage
     // async fn get_metrics(
@@ -377,6 +396,7 @@ pub async fn run_web_service(
     //     (StatusCode::OK, Json(metrics))
     // }
 
+    #[cfg(feature = "database")]
     async fn rename_access_key(
         State(state): State<AppState>,
         Path(id): Path<String>,
@@ -453,6 +473,14 @@ pub async fn run_web_service(
                 )
             }
         }
+    }
+    #[cfg(not(feature = "database"))]
+    async fn rename_access_key(
+        State(_): State<AppState>,
+        Path(_): Path<String>,
+        Json(_): Json<RenameRequest>,
+    ) {
+        warn!("rename_access_key, not implemented with no database");
     }
 
     // Create router
@@ -605,6 +633,7 @@ struct AccessKey {
     access_url: Option<String>,
 }
 
+#[cfg(feature = "database")]
 async fn create_access_key(
     State(state): State<AppState>,
     payload: Option<Json<CreateAccessKeyRequest>>,
@@ -680,7 +709,12 @@ async fn create_access_key(
         }),
     )
 }
+#[cfg(not(feature = "database"))]
+async fn create_access_key(State(_): State<AppState>) -> impl IntoResponse {
+    warn!("create_access_key, not implemented with no database");
+}
 
+#[cfg(feature = "database")]
 async fn list_access_keys(State(state): State<AppState>) -> impl IntoResponse {
     let db = state.db.lock().await;
 
@@ -703,7 +737,12 @@ async fn list_access_keys(State(state): State<AppState>) -> impl IntoResponse {
 
     (StatusCode::OK, Json(AccessKeyListResponse { access_keys }))
 }
+#[cfg(not(feature = "database"))]
+async fn list_access_keys(State(_): State<AppState>) -> impl IntoResponse {
+    warn!("list_access_keys, not implemented with no database");
+}
 
+#[cfg(feature = "database")]
 async fn generate_ssurl_handler(State(state): State<AppState>, user_id: Option<AxPath<i64>>) -> impl IntoResponse {
     let user_id = user_id.map(|m| m.0).unwrap_or_else(|| -1);
 
@@ -729,7 +768,10 @@ async fn generate_ssurl_handler(State(state): State<AppState>, user_id: Option<A
         )
     }
 }
-
+#[cfg(not(feature = "database"))]
+async fn generate_ssurl_handler(State(state): State<AppState>, user_id: Option<AxPath<i64>>) -> impl IntoResponse {
+    warn!("generate_ssurl_handler, not implemented with no database");
+}
 async fn health_check() -> impl IntoResponse {
     (StatusCode::OK, json_api_message(true, "Service is healthy".to_string()))
 }

@@ -189,19 +189,7 @@ impl std::fmt::Display for KeyError {
     }
 }
 impl std::error::Error for KeyError {}
-/// Generates a 16-byte (128-bit) random key and returns it base64 URL-safe encoded
-pub fn generate_manager_key() -> Result<String, KeyError> {
-    // Create a buffer for the 16-byte key
-    let mut key = vec![0u8; 16];
 
-    // Fill it with random bytes using the OS random number generator
-    OsRng
-        .try_fill_bytes(&mut key)
-        .map_err(|_| KeyError::RandomGenerationFailed)?;
-
-    // Encode using base64 URL-safe encoding
-    Ok(URL_SAFE.encode(key))
-}
 
 #[derive(Debug, Deserialize)]
 pub struct SsUrlParams {
@@ -241,6 +229,7 @@ pub struct UserConfig {
     #[serde(skip_serializing)]
     pub updated_at: Option<NaiveDateTime>,
 }
+
 
 #[derive(Debug)]
 pub struct Database {
@@ -565,7 +554,7 @@ impl Database {
                 config_servers.push(server);
             }
         }
-        let key = generate_manager_key().unwrap();
+        let key = Config::generate_manager_key().unwrap();
 
         Ok(ManagerConfig {
             manager_port,
@@ -578,7 +567,7 @@ impl Database {
     pub fn get_config(&self, manager_port: u16, sock_path: String) -> Result<String, RusqliteError> {
         // Get all active servers with their users
         let servers = self.list_servers(true)?; // Only get active servers
-        let key = generate_manager_key().unwrap();
+        let key = Config::generate_manager_key().unwrap();
         // Create the manager config structure
         let config = ManagerConfig {
             manager_port,
@@ -1147,7 +1136,7 @@ mod tests {
     #[test]
     fn test_generate_manager_key() {
         // Test key generation and length
-        let key = generate_manager_key().unwrap();
+        let key = Config::generate_manager_key().unwrap();
 
         // Decode the key
         let decoded = URL_SAFE.decode(key).unwrap();
@@ -1156,14 +1145,14 @@ mod tests {
         assert_eq!(decoded.len(), 16);
 
         // Generate multiple keys and ensure they're different
-        let key1 = generate_manager_key().unwrap();
-        let key2 = generate_manager_key().unwrap();
+        let key1 = Config::generate_manager_key().unwrap();
+        let key2 = Config::generate_manager_key().unwrap();
         assert_ne!(key1, key2);
     }
 
     #[test]
     fn test_key_format() {
-        let key = generate_manager_key().unwrap();
+        let key = Config::generate_manager_key().unwrap();
 
         // Check that the key only contains valid URL-safe base64 characters
         assert!(key.chars().all(|c| {

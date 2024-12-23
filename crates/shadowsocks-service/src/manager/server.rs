@@ -30,7 +30,13 @@ use crate::{
     config::{ManagerConfig, ManagerServerHost, ManagerServerMode, SecurityConfig},
     net::FlowStat,
     server::ServerBuilder};
-use crate::mysql_db::Database;
+
+#[cfg(feature = "database")]
+pub use crate::mysql_db::Database;
+
+#[cfg(not(feature = "database"))]
+pub struct Database;
+
 
 enum ServerInstanceMode {
     Builtin {
@@ -299,6 +305,7 @@ impl Manager {
                         match self.listener.send_to(&a, &peer_addr).await {
                             Ok(_) => {
                                 // Added to config, add to database
+                                #[cfg(feature = "database")]
                                 if let Some(ref mut db) = database {
                                     let mut guard = db.lock().await;
                                     if let Ok(_) = guard.add_or_update_users(&req.config) {

@@ -12,18 +12,22 @@ use tokio::{
 use tokio::sync::Mutex;
 #[cfg(unix)]
 use shadowsocks_service::config::ManagerServerMode;
+#[cfg(feature = "database")]
+use shadowsocks_service::mysql_db::Database as Database;
+#[cfg(not(feature = "database"))]
+use shadowsocks_service::manager::server::Database as Database;
+
 use shadowsocks_service::{
     acl::AccessControl,
-    config::{Config, ConfigType, ManagerConfig, ManagerServerHost},
+    config::{Config, ConfigType, ManagerConfig, ManagerServerHost,},
     run_manager,
-    mysql_db::Database,
     shadowsocks::{
         config::{ManagerAddr, Mode},
         crypto::{available_ciphers, CipherKind},
         plugin::PluginConfig,
     },
 };
-use shadowsocks_service::mysql_db::generate_manager_key;
+
 #[cfg(feature = "logging")]
 use crate::logging;
 use crate::{
@@ -290,6 +294,7 @@ pub fn define_command_line_options(mut app: Command) -> Command {
 static SOCKET_PATH: &str =  "/tmp/ssm.sock";
 static DEFAULT_DATABASE: &str = "ss_manager.db";
 
+#[cfg(feature = "database")]
 fn create_default_database() -> Database {
     Database::new(DEFAULT_DATABASE).expect("Failed to create default database")
 }
@@ -335,11 +340,17 @@ pub fn create(matches: &ArgMatches) -> Result<(Runtime, impl Future<Output = Exi
 
         trace!("{:?}", service_config);
 
-        let mut database = matches.get_one::<PathBuf>("DATABASE").cloned()
-            .map(|path| Database::new(&path))
-            .transpose()
-            .expect("Failed to open database");
 
+        #[cfg(feature = "database")]
+        let mut database =  matches.get_one::<PathBuf>("DATABASE").cloned()
+        .map(|path| Database::new(&path))
+        .transpose()
+        .expect("Failed to open database");
+
+        #[cfg(not(feature = "database"))]
+        let mut database = None;
+
+        #[cfg(feature = "database")]
         if database.is_none() {
             warn!("No Database Configured, using default database: {:?}", DEFAULT_DATABASE);
             database = Some(create_default_database())
@@ -359,6 +370,7 @@ pub fn create(matches: &ArgMatches) -> Result<(Runtime, impl Future<Output = Exi
                 };
 
                 // If we have both a config file and database, update the database with the Config
+                #[cfg(feature = "database")]
                 if let Some(ref mut db) = database {
                     if let Err(err) = db.save_config_to_tables(&cfg) {
                         eprintln!("Error saving config to database: {err}");
@@ -373,6 +385,12 @@ pub fn create(matches: &ArgMatches) -> Result<(Runtime, impl Future<Output = Exi
 
                 match &database {
                     None => Config::new(ConfigType::Manager),
+                    #[cfg(not(feature = "database"))]
+                    Some(db) => {
+                        eprintln!("Socket command support with no database has not been implemented.");
+                        Config::new(ConfigType::Manager)
+                    }
+                    #[cfg(feature = "database")]
                     Some(db) => {
                         // Create base config with manager
                         let mut config = Config::new(ConfigType::Manager);
@@ -621,9 +639,10 @@ pub fn create(matches: &ArgMatches) -> Result<(Runtime, impl Future<Output = Exi
         // Clone the Arc for the web service
         let web_db = db.clone();
         let server = run_manager(config, Some(&mut db));
-        let url_key = generate_manager_key().expect("Failed to generate URL key!");
+        let url_key = Config::generate_manager_key().expect("Failed to generate URL key!");
 
         tokio::spawn(run_web_service(SOCKET_PATH.to_string(), host, url_key, web_db));
+
         warn!("Started!!!");
         tokio::pin!(abort_signal);
         tokio::pin!(server);

@@ -7,9 +7,15 @@ edition = "2021"
 name = "shadowsocks_vpn"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+[profile.release]
+panic = 'abort'  # Disable unwinding
+lto = true      # Enable link-time optimization
+codegen-units = 1 # Optimize for size
+strip = true    # Strip symbols
+
 [dependencies]
 shadowsocks = { path = "../shadowsocks" }
-shadowsocks-service = { path = "../shadowsocks-service", features = ["local"] }
+shadowsocks-service = { path = "../shadowsocks-service", features = ["local"], default-features = false }
 tokio = { version = "1.38", features = ["full"] }
 futures = "0.3"
 thiserror = "2.0"

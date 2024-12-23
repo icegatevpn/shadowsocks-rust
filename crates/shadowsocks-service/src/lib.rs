@@ -71,6 +71,7 @@ pub mod net;
 pub mod server;
 mod sys;
 mod utils;
+#[cfg(feature = "database")]
 pub mod mysql_db;
 // mod tokio_mysql_db;
 pub mod url_generator;

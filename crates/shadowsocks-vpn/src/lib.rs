@@ -7,7 +7,6 @@ use shadowsocks_service::{config::{Config, ConfigType}, run_local};
 use tokio::sync::oneshot;
 use std::sync::atomic::{AtomicBool, Ordering};
 use log::{debug, error, warn};
-use futures::pin_mut;
 
 pub struct ShadowsocksVPN {
     runtime: Runtime,
@@ -244,8 +243,7 @@ mod android {
     use jni::objects::{JClass, JString};
     use jni::sys::jlong;
     use android_logger::Config as LogConfig;
-    use log::{Level, LevelFilter};
-    use ndk_context::AndroidContext;
+    use log::{LevelFilter};
 
     pub fn init_logging() {
         android_logger::init_once(

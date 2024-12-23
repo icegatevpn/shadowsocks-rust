@@ -56,7 +56,8 @@ use std::{
     string::ToString,
     time::Duration,
 };
-
+use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE;
 use cfg_if::cfg_if;
 #[cfg(feature = "hickory-dns")]
 use hickory_resolver::config::{NameServerConfig, ResolverConfig};
@@ -65,6 +66,8 @@ use ipnet::IpNet;
 #[cfg(feature = "local-fake-dns")]
 use ipnet::{Ipv4Net, Ipv6Net};
 use log::warn;
+use rand::RngCore;
+use rand::rngs::OsRng;
 use serde::{Deserialize, Serialize};
 #[cfg(any(feature = "local-tunnel", feature = "local-dns"))]
 use shadowsocks::relay::socks5::Address;
@@ -82,6 +85,8 @@ use crate::acl::AccessControl;
 use crate::local::dns::NameServerAddr;
 #[cfg(feature = "local")]
 use crate::local::socks::config::Socks5AuthConfig;
+#[cfg(feature = "database")]
+use crate::mysql_db::KeyError;
 
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(untagged)]
@@ -2781,6 +2786,23 @@ impl Config {
         }
 
         Ok(())
+    }
+    /// Generates a 16-byte (128-bit) random key and returns it base64 URL-safe encoded
+    pub fn generate_manager_key() -> Result<String, Error> {
+        // Create a buffer for the 16-byte key
+        let mut key = vec![0u8; 16];
+
+        // Fill it with random bytes using the OS random number generator
+        OsRng
+            .try_fill_bytes(&mut key)
+            .map_err(|_| Error::new(
+                ErrorKind::MissingField,
+                "failed to fill bytes for key generation",
+                None,
+            ))?;
+
+        // Encode using base64 URL-safe encoding
+        Ok(URL_SAFE.encode(key))
     }
 }
 

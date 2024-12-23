@@ -32,7 +32,7 @@ required-features = ["utility"]
 [[bin]]
 name = "ssmanager"
 path = "bin/ssmanager.rs"
-required-features = ["manager"]
+required-features = ["manager", "database"]
 
 [[bin]]
 name = "ssservice"
@@ -61,6 +61,7 @@ default = [
     "local",
     "server",
     "manager",
+    "database",
     "utility",
     "service",
     "local-http",
@@ -85,6 +86,7 @@ full = [
     "local",
     "server",
     "manager",
+    "database",
     "utility",
     "service",
     "local-http",
@@ -116,7 +118,9 @@ local = ["shadowsocks-service/local"]
 # Enable remote server
 server = ["shadowsocks-service/server"]
 # Enable manager server
-manager = ["shadowsocks-service/manager"]
+manager = ["shadowsocks-service/manager", "database"]
+# Enable mysql database
+database = ["shadowsocks-service/database"]
 # Enable utility
 utility = ["qrcode"]
 # Enable service
@@ -247,7 +251,7 @@ rand = "0.8"
 futures = "0.3"
 tokio = { version = "1", features = ["rt", "signal", "macros", "signal"] }
 # Web server
-axum = "0.7"
+axum = { version = "0.7" }
 uuid = { version = "1.0", features = ["v4", "serde"] }
 async-channel = "2.3.1"
 
