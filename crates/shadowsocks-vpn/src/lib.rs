@@ -1,12 +1,11 @@
 
 use std::sync::Arc;
 use tokio::runtime::Runtime;
-// use shadowsocks::config::Config as SSConfig;
 use shadowsocks_service::{config::{Config, ConfigType}, run_local};
-// use futures::future::{self, Either};
 use tokio::sync::oneshot;
 use std::sync::atomic::{AtomicBool, Ordering};
-use log::{debug, error, warn};
+use log::{debug, error, info, warn};
+use crate::VPNError::ConfigError;
 
 pub struct ShadowsocksVPN {
     runtime: Runtime,
@@ -29,23 +28,27 @@ pub enum VPNError {
 
 impl ShadowsocksVPN {
     pub fn new(config: Config) -> Result<Self, VPNError> {
-        // Validate config
-        if config.check_integrity().is_err() {
-            return Err(VPNError::ConfigError("Invalid configuration".into()));
+        match config.check_integrity() {
+            Ok(_) => {
+                let runtime = Runtime::new()
+                    .map_err(|e| VPNError::RuntimeError(e.to_string()))?;
+
+                Ok(Self {
+                    runtime,
+                    config,
+                    running: Arc::new(AtomicBool::new(false)),
+                    shutdown_tx: None,
+                })
+            },
+            Err(err) => {
+                error!("{}", ConfigError(format!("{:?}", err)));
+                Err(VPNError::ConfigError(format!("{:?}", err)))
+            }
         }
-
-        let runtime = Runtime::new()
-            .map_err(|e| VPNError::RuntimeError(e.to_string()))?;
-
-        Ok(Self {
-            runtime,
-            config,
-            running: Arc::new(AtomicBool::new(false)),
-            shutdown_tx: None,
-        })
     }
 
     pub fn start(&mut self) -> Result<(), VPNError> {
+        debug!("<< starting VPN");
         if self.running.load(Ordering::Acquire) {
             warn!("VPN already running");
             return Ok(());
@@ -56,9 +59,12 @@ impl ShadowsocksVPN {
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
         self.shutdown_tx = Some(shutdown_tx);
 
+        debug!("starting server");
         // Spawn the server in the runtime
         self.runtime.spawn(async move {
+            debug!("in runtime");
             running.store(true, Ordering::Release);
+            info!("VPN runtime started: ${:?}", config);
 
             let server = run_local(config);
             let shutdown_rx = Box::pin(shutdown_rx);
@@ -255,11 +261,12 @@ mod android {
 
     #[no_mangle]
     #[allow(non_snake_case)]
-    pub extern "system" fn Java_com_example_ShadowsocksVPN_create(
+    pub extern "system" fn Java_com_icegatevpn_client_service_ShadowsocksVPN_create(
         mut env: JNIEnv,
         _: JClass,
         config: JString
     ) -> jlong {
+        debug!("<<VPN config create");
         // Initialize logging first
         init_logging();
 
@@ -270,31 +277,45 @@ mod android {
 
         // Use shadowsocks' built-in config loading
         let config = match Config::load_from_str(&config_str, ConfigType::Local) {
-            Ok(c) => c,
-            Err(_) => return 0,
+            Ok(c) => {
+                c
+            },
+            Err(e) => {
+                error!("<< Failed to load config: {:?}",e);
+                return 0
+            },
         };
 
+        debug!("<< VPN config 2 {:?}",config);
+
         match ShadowsocksVPN::new(config) {
-            Ok(vpn) => Box::into_raw(Box::new(vpn)) as jlong,
-            Err(_) => 0
+            Ok(vpn) => {
+                Box::into_raw(Box::new(vpn)) as jlong
+            },
+            Err(e) => {
+                error!("<< \"new\" Failed to run: {:?}",e);
+                0
+            }
         }
     }
 
     #[no_mangle]
-    pub extern "system" fn Java_com_example_ShadowsocksVPN_start(
+    pub extern "system" fn Java_com_icegatevpn_client_service_ShadowsocksVPN_start(
         _env: JNIEnv,
         _: JClass,
         ptr: jlong
     ) -> bool {
+        debug!("<< called start: ptr={:?}", ptr);
         if ptr == 0 {
             return false;
         }
         let vpn = unsafe { &mut *(ptr as *mut ShadowsocksVPN) };
+        debug!("<< calling into native start!");
         vpn.start().is_ok()
     }
 
     #[no_mangle]
-    pub extern "system" fn Java_com_example_ShadowsocksVPN_stop(
+    pub extern "system" fn Java_com_icegatevpn_client_service_ShadowsocksVPN_stop(
         _env: JNIEnv,
         _: JClass,
         ptr: jlong
@@ -307,7 +328,7 @@ mod android {
     }
 
     #[no_mangle]
-    pub extern "system" fn Java_com_example_ShadowsocksVPN_isRunning(
+    pub extern "system" fn Java_com_icegatevpn_client_service_ShadowsocksVPN__isRunning(
         _env: JNIEnv,
         _: JClass,
         ptr: jlong
@@ -320,7 +341,7 @@ mod android {
     }
 
     #[no_mangle]
-    pub extern "system" fn Java_com_example_ShadowsocksVPN_destroy(
+    pub extern "system" fn Java_com_icegatevpn_client_service_ShadowsocksVPN_destroy(
         _env: JNIEnv,
         _: JClass,
         ptr: jlong

@@ -1,9 +1,11 @@
 #!/opt/homebrew/bin/bash
 
+# export ANDROID_NDK_HOME=~/Library/Android/sdk/ndk/27.0.12077973
+
 # Configuration
 RUST_PROJECT_PATH="."
 OUTPUT_DIR="target/android-libs"
-FEATURES="stream-cipher,aead-cipher-extra,aead-cipher-2022"
+FEATURES="stream-cipher,aead-cipher-extra,aead-cipher-2022,local"
 NDK_VERSION="25"
 
 # First, make sure we're using bash
@@ -14,7 +16,7 @@ fi
 
 # Build targets
 TARGETS="x86_64-linux-android aarch64-linux-android armv7-linux-androideabi i686-linux-android"
-# TARGETS="armv7-linux-androideabi"
+# TARGETS="aarch64-linux-android"
 declare -A ABI_MAP
 ABI_MAP["x86_64-linux-android"]="x86_64"
 ABI_MAP["aarch64-linux-android"]="arm64-v8a"
@@ -56,7 +58,10 @@ build_all() {
        # Copy and rename the binary as a shared library
         if [ -f "$lib_path" ]; then
             cp "$lib_path" "$OUTPUT_DIR/$abi/libshadowsocks_vpn.so"
-            echo "Copied from $lib_path to $OUTPUT_DIR/$abi/libsslocal.so"
+            echo "Copied from $lib_path to $OUTPUT_DIR/$abi/libshadowsocks_vpn.so"
+
+            cp "$lib_path" "/Users/enoch.carter/IceGate/client/android/app/src/main/jniLibs/$abi/libshadowsocks_vpn.so"
+            echo "** Copied to /Users/enoch.carter/IceGate/client/android/app/src/main/jniLibs/$abi/libshadowsocks_vpn.so"
         else
             echo "Warning: Built library not found at $lib_path"
             echo "Looking for built files in target directory..."

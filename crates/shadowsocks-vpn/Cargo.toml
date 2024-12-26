@@ -29,7 +29,7 @@ ndk-context = "0.1"
 
 [features]
 default = ["aead-cipher-2022", "local"]
-local = ["shadowsocks-service/local"]
+local = ["shadowsocks-service/local", "shadowsocks-service/local-dns"]
 stream-cipher = ["shadowsocks-service/stream-cipher"]
 aead-cipher = ["shadowsocks-service/aead-cipher"]
 aead-cipher-extra = ["shadowsocks-service/aead-cipher-extra"]
