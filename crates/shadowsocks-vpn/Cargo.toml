@@ -16,20 +16,26 @@ strip = true    # Strip symbols
 [dependencies]
 shadowsocks = { path = "../shadowsocks" }
 shadowsocks-service = { path = "../shadowsocks-service", features = ["local"], default-features = false }
-tokio = { version = "1.38", features = ["full"] }
+tokio = { version = "1.38", features = ["full", "io-util"] }
 futures = "0.3"
 thiserror = "2.0"
 log = "0.4"
+tun2 = { version = "4.0", features = ["async"] }
+etherparse = "0.13"
+#etherparse = { version = "0.16", features = ["std"] }
+smoltcp = { version = "0.12", features = ["std", "proto-ipv4", "proto-ipv6", "socket-tcp", "socket-udp"] }
+
+
 
 # Android-specific dependencies
 [target.'cfg(target_os = "android")'.dependencies]
 jni = { version = "0.21", default-features = false }
-android_logger = "0.13"
+android_logger = "0.14"
 ndk-context = "0.1"
 
 [features]
 default = ["aead-cipher-2022", "local"]
-local = ["shadowsocks-service/local", "shadowsocks-service/local-dns"]
+local = ["shadowsocks-service/local", "shadowsocks-service/local-dns", "shadowsocks-service/local-tun"]
 stream-cipher = ["shadowsocks-service/stream-cipher"]
 aead-cipher = ["shadowsocks-service/aead-cipher"]
 aead-cipher-extra = ["shadowsocks-service/aead-cipher-extra"]
