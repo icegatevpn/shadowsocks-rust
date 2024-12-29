@@ -364,10 +364,6 @@ impl<S> CryptoStream<S> {
         method: CipherKind,
         key: &[u8],
     ) -> CryptoStream<S> {
-// <<<<<<< HEAD
-//         static EMPTY_IDENTITY: [Bytes; 0] = [];
-//         CryptoStream::from_stream_with_identity(context, stream, stream_ty, method, key, &EMPTY_IDENTITY, &None)
-// =======
         const EMPTY_IDENTITY: [Bytes; 0] = [];
         CryptoStream::from_stream_with_identity(context, stream, stream_ty, method, key, &EMPTY_IDENTITY, &None)
     }
