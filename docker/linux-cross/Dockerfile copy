@@ -1,0 +1,35 @@
+ARG CROSS_BASE_IMAGE
+FROM $CROSS_BASE_IMAGE
+
+ARG DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && \
+    apt-get install --assume-yes --no-install-recommends \
+    build-essential \
+    cmake \
+    nasm \
+    llvm-8-dev \
+    libclang-8-dev \
+    clang-8 \
+    mingw-w64 \
+    mingw-w64-tools \
+    curl \
+    unzip \
+    git \
+    ca-certificates \
+    && git config --global --add safe.directory '*' \
+    && rm -rf /var/lib/apt/lists/* /tmp/*
+
+# Download and build SQLite for Android cross-compilation
+WORKDIR /tmp
+RUN update-ca-certificates && \
+    curl -L 'https://www.sqlite.org/2024/sqlite-amalgamation-3450100.zip' -o sqlite.zip && \
+    unzip sqlite.zip && \
+    cd sqlite-amalgamation-3450100 && \
+    aarch64-linux-android-gcc -c sqlite3.c -o sqlite3.o && \
+    aarch64-linux-android-ar rcs libsqlite3.a sqlite3.o && \
+    cp libsqlite3.a /usr/aarch64-linux-android/lib/ && \
+    cd .. && \
+    rm -rf sqlite-amalgamation-3450100 sqlite.zip
+
+ENV GOCACHE=/tmp
