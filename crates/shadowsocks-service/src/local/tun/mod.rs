@@ -28,11 +28,11 @@ cfg_if! {
                  target_os = "android",
                  target_os = "windows",
                  target_os = "freebsd"))] {
-        use tun2::{
+        use tun::{
             create_as_async, AsyncDevice, Configuration as TunConfiguration, AbstractDevice, Error as TunError, Layer,
         };
     } else {
-        use tun2::{AbstractDevice, Configuration as TunConfiguration, Error as TunError, Layer};
+        use tun::{AbstractDevice, Configuration as TunConfiguration, Error as TunError, Layer};
 
         mod fake_tun;
         use self::fake_tun::{create_as_async, AsyncDevice};
@@ -48,6 +48,32 @@ mod tcp;
 mod udp;
 mod virt_device;
 
+
+pub trait DeviceNetHelper: Send + Sync {
+    fn address(&self) -> io::Result<IpAddr>;
+    fn netmask(&self) -> io::Result<IpAddr>;
+}
+/// Basic implementation that stores static values
+pub struct StaticDeviceNetHelper {
+    address: IpAddr,
+    netmask: IpAddr,
+}
+
+impl StaticDeviceNetHelper {
+    pub fn new(address: IpAddr, netmask: IpAddr) -> Self {
+        StaticDeviceNetHelper { address, netmask }
+    }
+}
+impl DeviceNetHelper for StaticDeviceNetHelper {
+    fn address(&self) -> io::Result<IpAddr> {
+        Ok(self.address)
+    }
+
+    fn netmask(&self) -> io::Result<IpAddr> {
+        Ok(self.netmask)
+    }
+}
+
 /// Tun service builder
 pub struct TunBuilder {
     context: Arc<ServiceContext>,
@@ -55,6 +81,7 @@ pub struct TunBuilder {
     tun_config: TunConfiguration,
     udp_expiry_duration: Option<Duration>,
     udp_capacity: Option<usize>,
+    net_helper: Option<Arc<dyn DeviceNetHelper>>,
     mode: Mode,
 }
 
@@ -70,12 +97,18 @@ impl TunBuilder {
             tun_config: TunConfiguration::default(),
             udp_expiry_duration: None,
             udp_capacity: None,
+            net_helper: None,
             mode: Mode::TcpOnly,
         }
     }
 
     pub fn address(&mut self, addr: IpNet) {
         self.tun_config.address(addr.addr()).netmask(addr.netmask());
+    }
+    // Add method to set the network helper
+    pub fn with_net_helper<H: DeviceNetHelper + 'static>(&mut self, helper: H) -> &mut Self {
+        self.net_helper = Some(Arc::new(helper));
+        self
     }
 
     pub fn destination(&mut self, addr: IpNet) {
@@ -138,6 +171,7 @@ impl TunBuilder {
             udp_cleanup_interval,
             udp_keepalive_rx,
             mode: self.mode,
+            net_helper: self.net_helper,
         })
     }
 }
@@ -145,6 +179,7 @@ impl TunBuilder {
 /// Tun service
 pub struct Tun {
     device: AsyncDevice,
+    net_helper: Option<Arc<dyn DeviceNetHelper>>,
     tcp: TcpTun,
     udp: UdpTun,
     udp_cleanup_interval: Duration,
@@ -164,16 +199,24 @@ impl Tun {
         let address = match self.device.address() {
             Ok(a) => a,
             Err(err) => {
-                error!("[TUN] failed to get device address, error: {}", err);
-                return Err(io::Error::new(io::ErrorKind::Other, err));
+                if let Some(helper) = &self.net_helper {
+                    helper.address()?
+                } else {
+                    error!("[TUN] failed to get device address, error: {}", err);
+                    return Err(io::Error::new(io::ErrorKind::Other, err));
+                }
             }
         };
 
         let netmask = match self.device.netmask() {
             Ok(n) => n,
             Err(err) => {
-                error!("[TUN] failed to get device netmask, error: {}", err);
-                return Err(io::Error::new(io::ErrorKind::Other, err));
+                if let Some(helper) = &self.net_helper {
+                    helper.netmask()?
+                } else {
+                    error!("[TUN] failed to get device netmask, error: {}", err);
+                    return Err(io::Error::new(io::ErrorKind::Other, err));
+                }
             }
         };
 
@@ -216,13 +259,15 @@ impl Tun {
                     match self.device.write(&packet).await {
                         Ok(n) => {
                             if n < packet.len() {
-                                warn!("[TUN] sent IP packet (UDP), but truncated. sent {} < {}, {:?}", n, packet.len(), ByteStr::new(&packet));
+                                warn!("[TUN] sent IP packet (UDP), but truncated. sent {} < {}, {:?}",
+                                      n, packet.len(), ByteStr::new(&packet));
                             } else {
                                 trace!("[TUN] sent IP packet (UDP) {:?}", ByteStr::new(&packet));
                             }
                         }
                         Err(err) => {
-                            error!("[TUN] failed to set packet information, error: {}, {:?}", err, ByteStr::new(&packet));
+                            error!("[TUN] failed to write packet, error: {}, {:?}",
+                                  err, ByteStr::new(&packet));
                         }
                     }
                 }
@@ -243,13 +288,15 @@ impl Tun {
                     match self.device.write(&packet).await {
                         Ok(n) => {
                             if n < packet.len() {
-                                warn!("[TUN] sent IP packet (TCP), but truncated. sent {} < {}, {:?}", n, packet.len(), ByteStr::new(&packet));
+                                warn!("[TUN] sent IP packet (TCP), but truncated. sent {} < {}, {:?}",
+                                      n, packet.len(), ByteStr::new(&packet));
                             } else {
                                 trace!("[TUN] sent IP packet (TCP) {:?}", ByteStr::new(&packet));
                             }
                         }
                         Err(err) => {
-                            error!("[TUN] failed to set packet information, error: {}, {:?}", err, ByteStr::new(&packet));
+                            error!("[TUN] failed to write packet, error: {}, {:?}",
+                                  err, ByteStr::new(&packet));
                         }
                     }
                 }

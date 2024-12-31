@@ -20,16 +20,17 @@ tokio = { version = "1.38", features = ["full", "io-util"] }
 futures = "0.3"
 thiserror = "2.0"
 log = "0.4"
-tun2 = { version = "4.0", features = ["async"] }
+tun = { version = "0.6", features = ["async"] }
 etherparse = "0.13"
 #etherparse = { version = "0.16", features = ["std"] }
 smoltcp = { version = "0.12", features = ["std", "proto-ipv4", "proto-ipv6", "socket-tcp", "socket-udp"] }
+ipnet = "2.10.1"
 
 
 
 # Android-specific dependencies
 [target.'cfg(target_os = "android")'.dependencies]
-jni = { version = "0.21", default-features = false }
+jni = { version = "0.21", features = ["invocation"] }
 android_logger = "0.14"
 ndk-context = "0.1"
 

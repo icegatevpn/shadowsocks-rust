@@ -1,146 +1,205 @@
-use std::{io, sync::Arc};
-use tokio::sync::Mutex;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use shadowsocks::config::Mode;
-use shadowsocks_service::config::Config;
-use tun2::{AsyncDevice, Configuration, Device};
+use crate::TunError;
 use etherparse::{Ipv4HeaderSlice, Ipv6HeaderSlice};
 use log::{debug, error, info};
-use crate::TunError;
+use shadowsocks::config::Mode;
+use shadowsocks_service::config::Config;
+use shadowsocks_service::local::context::ServiceContext;
+use shadowsocks_service::local::loadbalancing::{PingBalancer, PingBalancerBuilder};
+use shadowsocks_service::local::tun::{StaticDeviceNetHelper, TunBuilder};
+use std::{io, sync::Arc};
+use std::ffi::{c_char, CStr, CString};
+use std::fmt::Debug;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::sync::Mutex;
+// use std::sync::Mutex as StdMutex;
+use ipnet::IpNet;
+use std::net::IpAddr;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use futures::executor::block_on;
 
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub enum VPNStatusCode {
+    Started = 0,
+    Connecting = 1,
+    Connected = 2,
+    Disconnecting = 3,
+    Disconnected = 4,
+    Error = 5,
+}
+// Type definition for the callback function
+// pub type StatusCallback = extern "C" fn(status: VPNStatusCode, message: *const c_char);
+
+#[repr(C)]
+#[derive(Debug, Clone)]
+pub struct VPNStatus {
+    code: VPNStatusCode,
+    message: Option<String>,
+}
+impl VPNStatus {
+    pub fn new(code: VPNStatusCode, message: Option<String>) -> Self {
+        VPNStatus { code, message }
+    }
+
+    pub fn connecting() -> Self {
+        VPNStatus::new(VPNStatusCode::Connecting, None)
+    }
+
+    pub fn connected() -> Self {
+        VPNStatus::new(VPNStatusCode::Connected, None)
+    }
+
+    pub fn disconnected() -> Self {
+        VPNStatus::new(VPNStatusCode::Disconnected, None)
+    }
+
+    pub fn error(msg: &str) -> Self {
+        VPNStatus::new(VPNStatusCode::Error, Some(msg.to_string()))
+    }
+}
+pub struct TunDeviceConfig {
+    pub fd: i32,
+    pub address: IpNet,         // Interface address with netmask
+    pub destination: Option<IpNet>, // Optional destination network
+    pub mtu: Option<i32>,
+}
+impl Debug for TunDeviceConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TunDeviceConfig")
+            .field("address", &self.address)
+            .field("destination", &self.destination)
+            .field("fd", &self.fd)
+            .field("mtu", &self.mtu)
+            .finish()
+
+    }
+}
 pub struct MobileTunDevice {
-    device: Arc<Mutex<AsyncDevice>>,
+    device: Arc<Mutex<Option<TunBuilder>>>, // Store the builder until we're ready to build
     config: Config,
-    file_descriptor: i32,
+    tun_config: TunDeviceConfig,
+    status: Mutex<VPNStatus>,
 }
 
 impl MobileTunDevice {
-    pub fn new(fd: i32, config: Config) -> Result<Self, TunError> {
-        debug!("<< Creating TUN device with fd: {}", fd);
+    pub async fn get_status(&self) -> VPNStatus {
+        self.status.lock().await.clone()
+    }
+    async fn update_status(&self, status: VPNStatus) {
+        let mut gg = self.status.lock().await;
+        *gg = status;
+    }
 
-        // Create TUN configuration
-        let mut tun_config = Configuration::default();
-        tun_config.raw_fd(fd);
-        tun_config.mtu(1500);
+    pub async fn new(tun_config: TunDeviceConfig, config: Config) -> Result<Self, TunError> {
+        debug!("Creating TUN device with config: {:?}", tun_config);
 
-        // Create base Device
-        let device = Device::new(&tun_config)
-            .map_err(|e| TunError::DeviceError("Failed to create TUN device"))?;
+        // Create a TunBuilder using the existing shadowsocks implementation
+        let context = Arc::new(ServiceContext::new());
+        let mut balancer_builder = PingBalancerBuilder::new(
+            context.clone(),
+            Mode::TcpAndUdp,
+        );
 
-        // Convert to AsyncDevice
-        let async_device = AsyncDevice::new(device)
+        // Add servers from config
+        for server in &config.server {
+            balancer_builder.add_server(server.clone());
+        }
+        // Build the balancer
+        let balancer = balancer_builder.build().await.map_err(|e| {
+            error!("Failed to build balancer: {:?}", e);
+            TunError::ConfigError("Failed to create balancer")
+        })?;
 
-            .map_err(|e| {
-                error!("FAILED!! {:?}", e);
-                TunError::DeviceError("Failed to create async TUN device")
-            })?;
+        // Create TunBuilder
+        let mut builder = TunBuilder::new(context.clone(), balancer);
+        builder.file_descriptor(tun_config.fd);
+        builder.address(tun_config.address);
+        if let Some(dest) = tun_config.destination {
+            builder.destination(dest);
+        }
+        // Create the network helper with the configured addresses
+        let net_helper = StaticDeviceNetHelper::new(
+            tun_config.address.addr(),
+            tun_config.address.netmask()
+        );
+        builder.with_net_helper(net_helper);
+
+        builder.mode(Mode::TcpAndUdp);
+        builder.name("shadowsocks-rust-tun-device");
 
         Ok(MobileTunDevice {
-            device: Arc::new(Mutex::new(async_device)),
+            device: Arc::new(Mutex::new(Some(builder))),
             config,
-            file_descriptor: fd,
+            tun_config,
+            status: Mutex::new(VPNStatus::new(VPNStatusCode::Started, None)),
         })
     }
 
     pub async fn start_tunnel(&self) -> Result<(), TunError> {
         info!("Starting TUN tunnel");
-        let device = self.device.clone();
+        self.update_status(VPNStatus::connecting()).await;
 
-        // Set up TCP/UDP relay handlers
-        let tcp_relay = self.setup_tcp_relay().await?;
-        let udp_relay = self.setup_udp_relay().await?;
+        let mut device_lock = self.device.lock().await;
 
-        loop {
-            let mut dev = device.lock().await;
-            let mut buffer = vec![0u8; 1500]; // Standard MTU size
+        // Take the builder out of the Option
+        if let Some(builder) = device_lock.take() {
+            let tun = builder.build().await.map_err( |e|  {
+                error!("Failed to build TUN device: {:?}", e);
+                block_on(async move {
+                    self.update_status(VPNStatus::error(&format!("Failed to build TUN device: {:?}", e))).await;
+                });
+                TunError::DeviceError("Failed to create TUN device")
+            })?;
 
-            match dev.read(&mut buffer).await {
-                Ok(n) if n > 0 => {
-                    // Try parsing as IPv4 first
-                    if let Ok(ipv4) = Ipv4HeaderSlice::from_slice(&buffer[..n]) {
-                        match ipv4.protocol() {
-                            6 => { // TCP
-                                if let Err(e) = tcp_relay.handle_packet(&buffer[..n]).await {
-                                    error!("TCP handling error: {:?}", e);
-                                }
-                            },
-                            17 => { // UDP
-                                if let Err(e) = udp_relay.handle_packet(&buffer[..n]).await {
-                                    error!("UDP handling error: {:?}", e);
-                                }
-                            },
-                            _ => debug!("Ignoring non-TCP/UDP IPv4 packet"),
-                        }
-                    } else if let Ok(ipv6) = Ipv6HeaderSlice::from_slice(&buffer[..n]) {
-                        match ipv6.next_header() {
-                            6 => { // TCP
-                                if let Err(e) = tcp_relay.handle_packet(&buffer[..n]).await {
-                                    error!("TCP handling error: {:?}", e);
-                                }
-                            },
-                            17 => { // UDP
-                                if let Err(e) = udp_relay.handle_packet(&buffer[..n]).await {
-                                    error!("UDP handling error: {:?}", e);
-                                }
-                            },
-                            _ => debug!("Ignoring non-TCP/UDP IPv6 packet"),
-                        }
-                    } else {
-                        debug!("Failed to parse IP packet");
-                    }
-                },
-                Ok(_) => continue,
+            // Release the lock before running
+            drop(device_lock);
+
+            self.update_status(VPNStatus::connected()).await;
+
+            // Run the TUN device
+            match tun.run().await {
+                Ok(_) => {
+                    self.update_status(VPNStatus::disconnected()).await;
+                    Ok(())
+                }
                 Err(e) => {
-                    error!("Error reading from TUN device: {}", e);
-                    return Err(TunError::IoError(e));
+                    self.update_status(VPNStatus::error(&format!("Tunnel error: {}", e))).await;
+                    Err(TunError::IoError(e))
                 }
             }
+        } else {
+            self.update_status(VPNStatus::error("TUN device already started")).await;
+            Err(TunError::DeviceError("TUN device already started"))
         }
     }
-
-    async fn setup_tcp_relay(&self) -> Result<TcpRelay, TunError> {
-        Ok(TcpRelay::new(self.config.clone()))
-    }
-
-    async fn setup_udp_relay(&self) -> Result<UdpRelay, TunError> {
-        Ok(UdpRelay::new(self.config.clone()))
-    }
-
-    pub async fn write_packet(&self, packet: &[u8]) -> Result<usize, TunError> {
-        let mut dev = self.device.lock().await;
-        dev.write(packet).await
-            .map_err(TunError::IoError)
-    }
 }
 
-/// TCP Relay handler using shadowsocks
-struct TcpRelay {
-    config: Config,
-}
+// struct TcpRelay {
+//     config: Config,
+// }
+//
+// impl TcpRelay {
+//     fn new(config: Config) -> Self {
+//         TcpRelay { config }
+//     }
+//
+//     async fn handle_packet(&self, packet: &[u8]) -> io::Result<()> {
+//         // Implement shadowsocks TCP relay logic
+//         Ok(())
+//     }
+// }
 
-impl TcpRelay {
-    fn new(config: Config) -> Self {
-        TcpRelay { config }
-    }
-
-    async fn handle_packet(&self, packet: &[u8]) -> io::Result<()> {
-        // Implement shadowsocks TCP relay logic
-        Ok(())
-    }
-}
-
-/// UDP Relay handler using shadowsocks
-struct UdpRelay {
-    config: Config,
-}
-
-impl UdpRelay {
-    fn new(config: Config) -> Self {
-        UdpRelay { config }
-    }
-
-    async fn handle_packet(&self, packet: &[u8]) -> io::Result<()> {
-        // Implement shadowsocks UDP relay logic
-        Ok(())
-    }
-}
+// struct UdpRelay {
+//     config: Config,
+// }
+//
+// impl UdpRelay {
+//     fn new(config: Config) -> Self {
+//         UdpRelay { config }
+//     }
+//
+//     async fn handle_packet(&self, packet: &[u8]) -> io::Result<()> {
+//         // Implement shadowsocks UDP relay logic
+//         Ok(())
+//     }
+// }

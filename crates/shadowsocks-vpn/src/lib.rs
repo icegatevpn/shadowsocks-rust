@@ -1,11 +1,11 @@
 mod mobile_tun_device;
 
-use std::io;
+use std::{io, ptr};
 use std::sync::Arc;
 use tokio::runtime::Runtime;
 use shadowsocks_service::{config::{Config, ConfigType}, run_local};
 use tokio::sync::oneshot;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 use log::{debug, error, info, warn};
 use crate::VPNError::ConfigError;
 
@@ -188,6 +188,7 @@ impl VPNService for ShadowsocksVPN {
 mod mobile {
     use super::*;
     use std::sync::Arc;
+    use jni::sys::JavaVM;
     use tokio::sync::Mutex;
     use crate::mobile_tun_device::MobileTunDevice;
 
@@ -198,7 +199,7 @@ mod mobile {
     }
 
     impl MobileVPN {
-        pub fn new(config: Config) -> Result<Self, VPNError> {
+        pub async fn new(config: Config) -> Result<Self, VPNError> {
             Ok(MobileVPN {
                 inner: ShadowsocksVPN::new(config)?,
                 tun_device: None,
@@ -206,10 +207,10 @@ mod mobile {
         }
 
         pub fn setup_tun(&mut self, fd: i32) -> Result<(), VPNError> {
-            let tun = MobileTunDevice::new(fd, self.inner.config.clone())
-                .map_err(|e| VPNError::RuntimeError(format!("TUN setup error: {:?}", e)))?;
-
-            self.tun_device = Some(Arc::new(tun));
+            // let tun = MobileTunDevice::new(fd, self.inner.config.clone())
+            //     .map_err(|e| VPNError::RuntimeError(format!("TUN setup error: {:?}", e)))?;
+            //
+            // self.tun_device = Some(Arc::new(tun));
             Ok(())
         }
 
@@ -239,14 +240,39 @@ mod mobile {
         }
     }
 
+    // Global static to store JavaVM pointer
+    static JAVA_VM: AtomicPtr<*mut JavaVM> = AtomicPtr::new(ptr::null_mut());
+
+    #[no_mangle]
+    #[allow(non_snake_case)]
+    pub extern "system" fn JNI_OnLoad(vm: JavaVM, _: *mut std::ffi::c_void) -> jni::sys::jint {
+        // Store JavaVM pointer for later use
+        let vm_ptr = Box::into_raw(Box::new(vm)) as *mut *mut JavaVM;
+        JAVA_VM.store(vm_ptr, Ordering::SeqCst);
+
+        jni::sys::JNI_VERSION_1_6
+    }
+
     // Android-specific JNI interface
     #[cfg(target_os = "android")]
     pub mod android {
-        use super::*;
+        use std::ffi::{c_char, CStr};
         use jni::JNIEnv;
-        use jni::objects::{JClass, JString};
+        use super::*;
+        // use jni::JNIEnv;
+        use jni::objects::{GlobalRef, JClass, JObject, JString, JValue};
         use jni::sys::{jboolean, jint, jlong};
         use log::LevelFilter;
+        use crate::mobile_tun_device::{StatusCallback, TunDeviceConfig, VPNStatusCode};
+
+
+        pub fn init_logging() {
+            android_logger::init_once(
+                android_logger::Config::default()
+                    .with_max_level(LevelFilter::Debug)
+                    .with_tag("ShadowsocksVPN"),
+            );
+        }
 
         #[no_mangle]
         pub extern "system" fn Java_com_icegatevpn_client_service_ShadowsocksVPN__isRunning(
@@ -270,8 +296,7 @@ mod mobile {
             if ptr == 0 {
                 return false;
             }
-            let vpn = unsafe { &mut *(ptr as *mut ShadowsocksVPN) };
-            vpn.stop().is_ok()
+            true
         }
 
         #[no_mangle]
@@ -281,33 +306,57 @@ mod mobile {
             config: JString,
             fd: jint,
         ) -> jlong {
-            android_logger::init_once(
-                android_logger::Config::default()
-                    .with_max_level(LevelFilter::Debug)
-                    .with_tag("ShadowsocksVPN"),
-            );
+
+            init_logging();
 
             let config_str: String = match env.get_string(&config) {
                 Ok(s) => s.into(),
                 Err(_) => return 0,
             };
 
-            // Create VPN instance
-            let mut vpn = match MobileVPN::new(Config::load_from_str(&config_str, ConfigType::Local).unwrap()) {
-                Ok(vpn) => vpn,
+                // Create runtime for async operations
+            let runtime = match Runtime::new() {
+                Ok(rt) => rt,
                 Err(e) => {
-                    error!("Failed to create VPN: {:?}", e);
+                    error!("Failed to create runtime: {:?}", e);
                     return 0;
                 }
             };
 
-            // Setup TUN device
-            if let Err(e) = vpn.setup_tun(fd as i32) {
-                error!("Failed to setup TUN: {:?}", e);
-                return 0;
-            }
+            // Load config
+            let config = match Config::load_from_str(&config_str, ConfigType::Local) {
+                Ok(c) => c,
+                Err(e) => {
+                    error!("<< Failed to load config: {:?}", e);
+                    return 0;
+                }
+            };
 
-            Box::into_raw(Box::new(vpn)) as jlong
+            // Create TUN device configuration
+            // This sets up a default configuration that should work for most Android VPN setups
+            let tun_config = TunDeviceConfig {
+                fd: fd as i32,
+                address: "10.1.10.2/24".parse().unwrap(),  // VPN interface address
+                destination: Some("0.0.0.0/0".parse().unwrap()), // Route all traffic
+                mtu: Some(1500),
+            };
+
+            // Create TUN device using runtime to handle async operations
+            let mut tun = match runtime.block_on(async {
+                MobileTunDevice::new(tun_config, config).await
+            }) {
+                Ok(tun) => tun,
+                Err(e) => {
+                    error!("<< Failed to create TUN device: {:?}", e);
+                    return 0;
+                }
+            };
+
+            // Set the callback
+            tun.set_status_callback(status_callback);
+            // Box both the runtime and TUN device together
+            let state = Box::new((runtime, tun));
+            Box::into_raw(state) as jlong
         }
 
         #[no_mangle]
@@ -316,8 +365,26 @@ mod mobile {
             _: JClass,
             ptr: jlong,
         ) -> jboolean {
-            let vpn = unsafe { &mut *(ptr as *mut MobileVPN) };
-            vpn.start().is_ok() as jboolean
+            // let vpn = unsafe { &mut *(ptr as *mut MobileVPN) };
+            // vpn.start().is_ok() as jboolean
+            debug!("<< called start: ptr={:?}", ptr);
+            if ptr == 0 {
+                return false as jboolean;
+            }
+
+            let state = unsafe { &mut *(ptr as *mut (Runtime, MobileTunDevice)) };
+            let (runtime, tun) = state;
+
+            debug!("<< Starting TUN device");
+            match runtime.block_on(async {
+                tun.start_tunnel().await
+            }) {
+                Ok(_) => true as jboolean,
+                Err(e) => {
+                    error!("<< Failed to start TUN device: {:?}", e);
+                    false as jboolean
+                }
+            }
         }
     }
 
@@ -363,192 +430,3 @@ mod mobile {
         }
     }
 }
-
-
-//
-// #[cfg(target_os = "ios")]
-// mod ios {
-//     use super::*;
-//     use std::ffi::{CStr, CString};
-//     use std::os::raw::c_char;
-//     use shadowsocks_service::config::Config;
-//
-//     #[no_mangle]
-//     pub extern "C" fn ss_vpn_create(config_json: *const c_char) -> *mut ShadowsocksVPN {
-//         let config_str = unsafe {
-//             if config_json.is_null() {
-//                 return std::ptr::null_mut();
-//             }
-//             match CStr::from_ptr(config_json).to_str() {
-//                 Ok(s) => s,
-//                 Err(_) => return std::ptr::null_mut(),
-//             }
-//         };
-//
-//         // Use shadowsocks' built-in config loading
-//         let config = match Config::load_from_str(config_str, ConfigType::Local) {
-//             Ok(c) => c,
-//             Err(_) => return std::ptr::null_mut(),
-//         };
-//
-//         match ShadowsocksVPN::new(config) {
-//             Ok(vpn) => Box::into_raw(Box::new(vpn)),
-//             Err(_) => std::ptr::null_mut()
-//         }
-//     }
-//
-//     #[no_mangle]
-//     pub extern "C" fn ss_vpn_start(vpn: *mut ShadowsocksVPN) -> bool {
-//         let vpn = unsafe {
-//             if vpn.is_null() {
-//                 return false;
-//             }
-//             &mut *vpn
-//         };
-//         vpn.start().is_ok()
-//     }
-//
-//     #[no_mangle]
-//     pub extern "C" fn ss_vpn_stop(vpn: *mut ShadowsocksVPN) -> bool {
-//         let vpn = unsafe {
-//             if vpn.is_null() {
-//                 return false;
-//             }
-//             &mut *vpn
-//         };
-//         vpn.stop().is_ok()
-//     }
-//
-//     #[no_mangle]
-//     pub extern "C" fn ss_vpn_destroy(vpn: *mut ShadowsocksVPN) {
-//         if !vpn.is_null() {
-//             unsafe {
-//                 let _ = Box::from_raw(vpn);
-//             }
-//         }
-//     }
-//
-//     #[no_mangle]
-//     pub extern "C" fn ss_vpn_is_running(vpn: *const ShadowsocksVPN) -> bool {
-//         let vpn = unsafe {
-//             if vpn.is_null() {
-//                 return false;
-//             }
-//             &*vpn
-//         };
-//         vpn.is_running()
-//     }
-// }
-//
-// // FFI interface for Android
-// #[cfg(target_os = "android")]
-// mod android {
-//     use super::*;
-//     use jni::JNIEnv;
-//     use jni::objects::{JClass, JString};
-//     use jni::sys::jlong;
-//     use android_logger::Config as LogConfig;
-//     use log::{LevelFilter};
-//
-//     pub fn init_logging() {
-//         android_logger::init_once(
-//             LogConfig::default()
-//                 .with_max_level(LevelFilter::Debug)
-//                 .with_tag("ShadowsocksVPN"),
-//         );
-//     }
-//
-//     #[no_mangle]
-//     #[allow(non_snake_case)]
-//     pub extern "system" fn Java_com_icegatevpn_client_service_ShadowsocksVPN_create(
-//         mut env: JNIEnv,
-//         _: JClass,
-//         config: JString
-//     ) -> jlong {
-//         debug!("<<VPN config create");
-//         // Initialize logging first
-//         init_logging();
-//
-//         let config_str: String = match env.get_string(&config) {
-//             Ok(s) => s.into(),
-//             Err(_) => return 0,
-//         };
-//
-//         // Use shadowsocks' built-in config loading
-//         let config = match Config::load_from_str(&config_str, ConfigType::Local) {
-//             Ok(c) => {
-//                 c
-//             },
-//             Err(e) => {
-//                 error!("<< Failed to load config: {:?}",e);
-//                 return 0
-//             },
-//         };
-//
-//         debug!("<< VPN config 2 {:?}",config);
-//
-//         match ShadowsocksVPN::new(config) {
-//             Ok(vpn) => {
-//                 Box::into_raw(Box::new(vpn)) as jlong
-//             },
-//             Err(e) => {
-//                 error!("<< \"new\" Failed to run: {:?}",e);
-//                 0
-//             }
-//         }
-//     }
-//
-//     #[no_mangle]
-//     pub extern "system" fn Java_com_icegatevpn_client_service_ShadowsocksVPN_start(
-//         _env: JNIEnv,
-//         _: JClass,
-//         ptr: jlong
-//     ) -> bool {
-//         debug!("<< called start: ptr={:?}", ptr);
-//         if ptr == 0 {
-//             return false;
-//         }
-//         let vpn = unsafe { &mut *(ptr as *mut ShadowsocksVPN) };
-//         debug!("<< calling into native start!");
-//         vpn.start().is_ok()
-//     }
-//
-//     #[no_mangle]
-//     pub extern "system" fn Java_com_icegatevpn_client_service_ShadowsocksVPN_stop(
-//         _env: JNIEnv,
-//         _: JClass,
-//         ptr: jlong
-//     ) -> bool {
-//         if ptr == 0 {
-//             return false;
-//         }
-//         let vpn = unsafe { &mut *(ptr as *mut ShadowsocksVPN) };
-//         vpn.stop().is_ok()
-//     }
-//
-//     #[no_mangle]
-//     pub extern "system" fn Java_com_icegatevpn_client_service_ShadowsocksVPN__isRunning(
-//         _env: JNIEnv,
-//         _: JClass,
-//         ptr: jlong
-//     ) -> bool {
-//         if ptr == 0 {
-//             return false;
-//         }
-//         let vpn = unsafe { &*(ptr as *mut ShadowsocksVPN) };
-//         vpn.is_running()
-//     }
-//
-//     #[no_mangle]
-//     pub extern "system" fn Java_com_icegatevpn_client_service_ShadowsocksVPN_destroy(
-//         _env: JNIEnv,
-//         _: JClass,
-//         ptr: jlong
-//     ) {
-//         if ptr != 0 {
-//             unsafe {
-//                 let _ = Box::from_raw(ptr as *mut ShadowsocksVPN);
-//             }
-//         }
-//     }
-// }
