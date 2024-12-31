@@ -27,14 +27,19 @@ pub enum VPNStatusCode {
     Disconnected = 4,
     Error = 5,
 }
+impl VPNStatusCode {
+    pub fn tou8(&self) -> u8 {
+        *self as u8
+    }
+}
 // Type definition for the callback function
 // pub type StatusCallback = extern "C" fn(status: VPNStatusCode, message: *const c_char);
 
 #[repr(C)]
 #[derive(Debug, Clone)]
 pub struct VPNStatus {
-    code: VPNStatusCode,
-    message: Option<String>,
+    pub code: VPNStatusCode,
+    pub message: Option<String>,
 }
 impl VPNStatus {
     pub fn new(code: VPNStatusCode, message: Option<String>) -> Self {
@@ -82,8 +87,12 @@ pub struct MobileTunDevice {
 }
 
 impl MobileTunDevice {
-    pub async fn get_status(&self) -> VPNStatus {
-        self.status.lock().await.clone()
+    pub fn get_status(&self) -> VPNStatus {
+        let mut status = VPNStatus::error("brand spaking new");
+        block_on(async {
+            status = self.status.lock().await.clone();
+        });
+        status
     }
     async fn update_status(&self, status: VPNStatus) {
         let mut gg = self.status.lock().await;
@@ -149,7 +158,7 @@ impl MobileTunDevice {
                     self.update_status(VPNStatus::error(&format!("Failed to build TUN device: {:?}", e))).await;
                 });
                 TunError::DeviceError("Failed to create TUN device")
-            })?;
+            }).expect("Failed to build TUN device");
 
             // Release the lock before running
             drop(device_lock);
@@ -159,16 +168,23 @@ impl MobileTunDevice {
             // Run the TUN device
             match tun.run().await {
                 Ok(_) => {
-                    self.update_status(VPNStatus::disconnected()).await;
+                    let status = VPNStatus::disconnected();
+                    self.update_status(status.clone()).await;
+                    // status
                     Ok(())
                 }
                 Err(e) => {
-                    self.update_status(VPNStatus::error(&format!("Tunnel error: {}", e))).await;
+                    let status = VPNStatus::error(&format!("Failed to run TUN device: {:?}", e));
+                    self.update_status(status.clone()).await;
+                    // status
                     Err(TunError::IoError(e))
+
                 }
             }
         } else {
-            self.update_status(VPNStatus::error("TUN device already started")).await;
+            let status = VPNStatus::error("TUN device already started");
+            self.update_status(status.clone()).await;
+            // status
             Err(TunError::DeviceError("TUN device already started"))
         }
     }

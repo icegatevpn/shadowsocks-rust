@@ -15,7 +15,7 @@ use std::{
 };
 
 use log::{debug, error, trace};
-use shadowsocks::{net::TcpSocketOpts, relay::socks5::Address};
+use shadowsocks::{net::TcpSocketOpts, relay::socks5::Address, ProxyClientStream};
 use smoltcp::{
     iface::{Config as InterfaceConfig, Interface, PollResult, SocketHandle, SocketSet},
     phy::{DeviceCapabilities, Medium},
@@ -245,6 +245,7 @@ pub struct TcpTun {
     iface_rx: mpsc::UnboundedReceiver<Vec<u8>>,
     iface_tx: mpsc::UnboundedSender<Vec<u8>>,
     iface_tx_avail: Arc<AtomicBool>,
+    window_size: usize,
 }
 
 impl Drop for TcpTun {
@@ -480,6 +481,11 @@ impl TcpTun {
         };
 
         let manager_notify = Arc::new(ManagerNotify::new(manager_handle.thread().clone()));
+        // Calculate optimal window size based on MTU
+        // We want about 10 full-sized packets in flight
+        let window_size = (mtu as usize * 10)
+            .min(65535) // Cap at 64KB to avoid overflow
+            .max(16384); // Minimum reasonable size
 
         TcpTun {
             context,
@@ -491,6 +497,7 @@ impl TcpTun {
             iface_rx,
             iface_tx,
             iface_tx_avail,
+            window_size
         }
     }
 
@@ -504,12 +511,16 @@ impl TcpTun {
         if tcp_packet.syn() && !tcp_packet.ack() {
             let accept_opts = self.context.accept_opts();
 
-            let send_buffer_size = accept_opts.tcp.send_buffer_size.unwrap_or(DEFAULT_TCP_SEND_BUFFER_SIZE);
-            let recv_buffer_size = accept_opts.tcp.recv_buffer_size.unwrap_or(DEFAULT_TCP_RECV_BUFFER_SIZE);
-
+            // let send_buffer_size = accept_opts.tcp.send_buffer_size.unwrap_or(DEFAULT_TCP_SEND_BUFFER_SIZE);
+            // let recv_buffer_size = accept_opts.tcp.recv_buffer_size.unwrap_or(DEFAULT_TCP_RECV_BUFFER_SIZE);
+            //
+            // let mut socket = TcpSocket::new(
+            //     TcpSocketBuffer::new(vec![0u8; recv_buffer_size as usize]),
+            //     TcpSocketBuffer::new(vec![0u8; send_buffer_size as usize]),
+            // );
             let mut socket = TcpSocket::new(
-                TcpSocketBuffer::new(vec![0u8; recv_buffer_size as usize]),
-                TcpSocketBuffer::new(vec![0u8; send_buffer_size as usize]),
+                TcpSocketBuffer::new(vec![0u8; self.window_size]),
+                TcpSocketBuffer::new(vec![0u8; self.window_size]),
             );
             socket.set_keep_alive(accept_opts.tcp.keepalive.map(From::from));
             // FIXME: It should follow system's setting. 7200 is Linux's default.

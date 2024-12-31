@@ -193,65 +193,44 @@ mod mobile {
     use crate::mobile_tun_device::MobileTunDevice;
 
     /// Extended ShadowsocksVPN struct for mobile platforms
-    pub struct MobileVPN {
-        inner: ShadowsocksVPN,
-        tun_device: Option<Arc<MobileTunDevice>>,
-    }
-
-    impl MobileVPN {
-        pub async fn new(config: Config) -> Result<Self, VPNError> {
-            Ok(MobileVPN {
-                inner: ShadowsocksVPN::new(config)?,
-                tun_device: None,
-            })
-        }
-
-        pub fn setup_tun(&mut self, fd: i32) -> Result<(), VPNError> {
-            // let tun = MobileTunDevice::new(fd, self.inner.config.clone())
-            //     .map_err(|e| VPNError::RuntimeError(format!("TUN setup error: {:?}", e)))?;
-            //
-            // self.tun_device = Some(Arc::new(tun));
-            Ok(())
-        }
-
-        pub fn start(&mut self) -> Result<(), VPNError> {
-            // Start the shadowsocks VPN service
-            self.inner.start()?;
-
-            // If TUN device is configured, start the tunnel
-            if let Some(tun) = &self.tun_device {
-                let tun_clone = tun.clone();
-                tokio::spawn(async move {
-                    if let Err(e) = tun_clone.start_tunnel().await {
-                        error!("TUN tunnel error: {:?}", e);
-                    }
-                });
-            }
-
-            Ok(())
-        }
-
-        pub fn stop(&mut self) -> Result<(), VPNError> {
-            self.inner.stop()
-        }
-
-        pub fn is_running(&self) -> bool {
-            self.inner.is_running()
-        }
-    }
-
-    // Global static to store JavaVM pointer
-    static JAVA_VM: AtomicPtr<*mut JavaVM> = AtomicPtr::new(ptr::null_mut());
-
-    #[no_mangle]
-    #[allow(non_snake_case)]
-    pub extern "system" fn JNI_OnLoad(vm: JavaVM, _: *mut std::ffi::c_void) -> jni::sys::jint {
-        // Store JavaVM pointer for later use
-        let vm_ptr = Box::into_raw(Box::new(vm)) as *mut *mut JavaVM;
-        JAVA_VM.store(vm_ptr, Ordering::SeqCst);
-
-        jni::sys::JNI_VERSION_1_6
-    }
+    // pub struct MobileVPN {
+    //     inner: ShadowsocksVPN,
+    //     tun_device: Option<Arc<MobileTunDevice>>,
+    // }
+    //
+    // impl MobileVPN {
+    //     pub async fn new(config: Config) -> Result<Self, VPNError> {
+    //         Ok(MobileVPN {
+    //             inner: ShadowsocksVPN::new(config)?,
+    //             tun_device: None,
+    //         })
+    //     }
+    //
+    //     pub fn start(&mut self) -> Result<(), VPNError> {
+    //         // Start the shadowsocks VPN service
+    //         self.inner.start()?;
+    //
+    //         // If TUN device is configured, start the tunnel
+    //         if let Some(tun) = &self.tun_device {
+    //             let tun_clone = tun.clone();
+    //             tokio::spawn(async move {
+    //                 if let Err(e) = tun_clone.start_tunnel().await {
+    //                     error!("TUN tunnel error: {:?}", e);
+    //                 }
+    //             });
+    //         }
+    //
+    //         Ok(())
+    //     }
+    //
+    //     pub fn stop(&mut self) -> Result<(), VPNError> {
+    //         self.inner.stop()
+    //     }
+    //
+    //     pub fn is_running(&self) -> bool {
+    //         self.inner.is_running()
+    //     }
+    // }
 
     // Android-specific JNI interface
     #[cfg(target_os = "android")]
@@ -261,9 +240,9 @@ mod mobile {
         use super::*;
         // use jni::JNIEnv;
         use jni::objects::{GlobalRef, JClass, JObject, JString, JValue};
-        use jni::sys::{jboolean, jint, jlong};
+        use jni::sys::{jboolean, jint, jlong, jobject};
         use log::LevelFilter;
-        use crate::mobile_tun_device::{StatusCallback, TunDeviceConfig, VPNStatusCode};
+        use crate::mobile_tun_device::{VPNStatus, TunDeviceConfig, VPNStatusCode};
 
 
         pub fn init_logging() {
@@ -352,39 +331,31 @@ mod mobile {
                 }
             };
 
-            // Set the callback
-            tun.set_status_callback(status_callback);
             // Box both the runtime and TUN device together
             let state = Box::new((runtime, tun));
             Box::into_raw(state) as jlong
         }
 
         #[no_mangle]
-        pub extern "system" fn Java_com_icegatevpn_client_service_ShadowsocksVPN_start(
-            _env: JNIEnv,
+        pub extern "system" fn Java_com_icegatevpn_client_service_ShadowsocksVPN_run(
             _: JClass,
             ptr: jlong,
-        ) -> jboolean {
-            // let vpn = unsafe { &mut *(ptr as *mut MobileVPN) };
-            // vpn.start().is_ok() as jboolean
+        ) -> jlong {
+
             debug!("<< called start: ptr={:?}", ptr);
             if ptr == 0 {
-                return false as jboolean;
+                return VPNStatusCode::Error.tou8() as jlong;
             }
 
             let state = unsafe { &mut *(ptr as *mut (Runtime, MobileTunDevice)) };
             let (runtime, tun) = state;
 
             debug!("<< Starting TUN device");
-            match runtime.block_on(async {
+            let _ = runtime.block_on(async {
                 tun.start_tunnel().await
-            }) {
-                Ok(_) => true as jboolean,
-                Err(e) => {
-                    error!("<< Failed to start TUN device: {:?}", e);
-                    false as jboolean
-                }
-            }
+            });
+            let status = tun.get_status();
+            status.code.tou8() as jlong
         }
     }
 
