@@ -1,20 +1,14 @@
 use crate::TunError;
-use etherparse::{Ipv4HeaderSlice, Ipv6HeaderSlice};
 use log::{debug, error, info};
 use shadowsocks::config::Mode;
 use shadowsocks_service::config::Config;
 use shadowsocks_service::local::context::ServiceContext;
-use shadowsocks_service::local::loadbalancing::{PingBalancer, PingBalancerBuilder};
+use shadowsocks_service::local::loadbalancing::{PingBalancerBuilder};
 use shadowsocks_service::local::tun::{StaticDeviceNetHelper, TunBuilder};
-use std::{io, sync::Arc};
-use std::ffi::{c_char, CStr, CString};
+use std::{sync::Arc};
 use std::fmt::Debug;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::Mutex;
-// use std::sync::Mutex as StdMutex;
 use ipnet::IpNet;
-use std::net::IpAddr;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use futures::executor::block_on;
 
 #[repr(C)]
@@ -23,17 +17,14 @@ pub enum VPNStatusCode {
     Started = 0,
     Connecting = 1,
     Connected = 2,
-    Disconnecting = 3,
-    Disconnected = 4,
-    Error = 5,
+    Disconnected = 3,
+    Error = 4,
 }
 impl VPNStatusCode {
     pub fn tou8(&self) -> u8 {
         *self as u8
     }
 }
-// Type definition for the callback function
-// pub type StatusCallback = extern "C" fn(status: VPNStatusCode, message: *const c_char);
 
 #[repr(C)]
 #[derive(Debug, Clone)]
@@ -62,10 +53,11 @@ impl VPNStatus {
         VPNStatus::new(VPNStatusCode::Error, Some(msg.to_string()))
     }
 }
+#[derive(Clone)]
 pub struct TunDeviceConfig {
     pub fd: i32,
-    pub address: IpNet,         // Interface address with netmask
-    pub destination: Option<IpNet>, // Optional destination network
+    pub address: IpNet,
+    pub destination: Option<IpNet>,
     pub mtu: Option<i32>,
 }
 impl Debug for TunDeviceConfig {
@@ -79,20 +71,16 @@ impl Debug for TunDeviceConfig {
 
     }
 }
+#[derive(Clone)]
 pub struct MobileTunDevice {
-    device: Arc<Mutex<Option<TunBuilder>>>, // Store the builder until we're ready to build
-    config: Config,
-    tun_config: TunDeviceConfig,
-    status: Mutex<VPNStatus>,
+    // Store the builder until we're ready to build
+    device: Arc<Mutex<Option<TunBuilder>>>,
+    pub status: Arc<Mutex<VPNStatus>>,
 }
 
 impl MobileTunDevice {
-    pub fn get_status(&self) -> VPNStatus {
-        let mut status = VPNStatus::error("brand spaking new");
-        block_on(async {
-            status = self.status.lock().await.clone();
-        });
-        status
+    pub async fn get_status_async(&self) -> VPNStatus {
+        self.status.lock().await.clone()
     }
     async fn update_status(&self, status: VPNStatus) {
         let mut gg = self.status.lock().await;
@@ -138,9 +126,7 @@ impl MobileTunDevice {
 
         Ok(MobileTunDevice {
             device: Arc::new(Mutex::new(Some(builder))),
-            config,
-            tun_config,
-            status: Mutex::new(VPNStatus::new(VPNStatusCode::Started, None)),
+            status: Arc::new(Mutex::new(VPNStatus::new(VPNStatusCode::Started, None))),
         })
     }
 
@@ -170,13 +156,11 @@ impl MobileTunDevice {
                 Ok(_) => {
                     let status = VPNStatus::disconnected();
                     self.update_status(status.clone()).await;
-                    // status
                     Ok(())
                 }
                 Err(e) => {
                     let status = VPNStatus::error(&format!("Failed to run TUN device: {:?}", e));
                     self.update_status(status.clone()).await;
-                    // status
                     Err(TunError::IoError(e))
 
                 }
@@ -184,38 +168,7 @@ impl MobileTunDevice {
         } else {
             let status = VPNStatus::error("TUN device already started");
             self.update_status(status.clone()).await;
-            // status
             Err(TunError::DeviceError("TUN device already started"))
         }
     }
 }
-
-// struct TcpRelay {
-//     config: Config,
-// }
-//
-// impl TcpRelay {
-//     fn new(config: Config) -> Self {
-//         TcpRelay { config }
-//     }
-//
-//     async fn handle_packet(&self, packet: &[u8]) -> io::Result<()> {
-//         // Implement shadowsocks TCP relay logic
-//         Ok(())
-//     }
-// }
-
-// struct UdpRelay {
-//     config: Config,
-// }
-//
-// impl UdpRelay {
-//     fn new(config: Config) -> Self {
-//         UdpRelay { config }
-//     }
-//
-//     async fn handle_packet(&self, packet: &[u8]) -> io::Result<()> {
-//         // Implement shadowsocks UDP relay logic
-//         Ok(())
-//     }
-// }

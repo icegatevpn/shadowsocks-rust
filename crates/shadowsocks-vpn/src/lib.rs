@@ -1,14 +1,14 @@
 mod mobile_tun_device;
+mod mobile_singleton;
 
-use std::{io, ptr};
+use std::{io};
 use std::sync::Arc;
 use tokio::runtime::Runtime;
-use shadowsocks_service::{config::{Config, ConfigType}, run_local};
+use shadowsocks_service::{config::Config, run_local};
 use tokio::sync::oneshot;
-use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use log::{debug, error, info, warn};
 use crate::VPNError::ConfigError;
-
 
 pub struct ShadowsocksVPN {
     runtime: Runtime,
@@ -186,64 +186,16 @@ impl VPNService for ShadowsocksVPN {
 
 #[cfg(any(target_os = "android", target_os = "ios"))]
 mod mobile {
-    use super::*;
-    use std::sync::Arc;
-    use jni::sys::JavaVM;
-    use tokio::sync::Mutex;
-    use crate::mobile_tun_device::MobileTunDevice;
-
-    /// Extended ShadowsocksVPN struct for mobile platforms
-    // pub struct MobileVPN {
-    //     inner: ShadowsocksVPN,
-    //     tun_device: Option<Arc<MobileTunDevice>>,
-    // }
-    //
-    // impl MobileVPN {
-    //     pub async fn new(config: Config) -> Result<Self, VPNError> {
-    //         Ok(MobileVPN {
-    //             inner: ShadowsocksVPN::new(config)?,
-    //             tun_device: None,
-    //         })
-    //     }
-    //
-    //     pub fn start(&mut self) -> Result<(), VPNError> {
-    //         // Start the shadowsocks VPN service
-    //         self.inner.start()?;
-    //
-    //         // If TUN device is configured, start the tunnel
-    //         if let Some(tun) = &self.tun_device {
-    //             let tun_clone = tun.clone();
-    //             tokio::spawn(async move {
-    //                 if let Err(e) = tun_clone.start_tunnel().await {
-    //                     error!("TUN tunnel error: {:?}", e);
-    //                 }
-    //             });
-    //         }
-    //
-    //         Ok(())
-    //     }
-    //
-    //     pub fn stop(&mut self) -> Result<(), VPNError> {
-    //         self.inner.stop()
-    //     }
-    //
-    //     pub fn is_running(&self) -> bool {
-    //         self.inner.is_running()
-    //     }
-    // }
 
     // Android-specific JNI interface
     #[cfg(target_os = "android")]
     pub mod android {
-        use std::ffi::{c_char, CStr};
         use jni::JNIEnv;
-        use super::*;
-        // use jni::JNIEnv;
-        use jni::objects::{GlobalRef, JClass, JObject, JString, JValue};
-        use jni::sys::{jboolean, jint, jlong, jobject};
-        use log::LevelFilter;
-        use crate::mobile_tun_device::{VPNStatus, TunDeviceConfig, VPNStatusCode};
-
+        use jni::objects::{JClass, JString};
+        use jni::sys::{jboolean, jint, jlong};
+        use log::{debug, error, LevelFilter};
+        use crate::mobile_singleton::MobileDeviceManager;
+        use crate::mobile_tun_device::VPNStatusCode;
 
         pub fn init_logging() {
             android_logger::init_once(
@@ -254,28 +206,32 @@ mod mobile {
         }
 
         #[no_mangle]
-        pub extern "system" fn Java_com_icegatevpn_client_service_ShadowsocksVPN__isRunning(
+        pub extern "system" fn Java_com_icegatevpn_client_service_ShadowsocksVPN_isRunning(
             _env: JNIEnv,
             _: JClass,
-            ptr: jlong
-        ) -> bool {
-            if ptr == 0 {
-                return false;
+            _ptr: jlong
+        ) -> jboolean {
+            debug!("Shadowsocks VPN check isRunning");
+            match futures::executor::block_on(async {
+                MobileDeviceManager::get_status().await
+            }) {
+                Ok(s) => (s.code.tou8() > 0 && s.code.tou8() <3) as jboolean,
+                Err(_) => false as jboolean,
             }
-            let vpn = unsafe { &*(ptr as *mut ShadowsocksVPN) };
-            vpn.is_running()
         }
 
         #[no_mangle]
         pub extern "system" fn Java_com_icegatevpn_client_service_ShadowsocksVPN_stop(
             _env: JNIEnv,
             _: JClass,
-            ptr: jlong
-        ) -> bool {
-            if ptr == 0 {
-                return false;
+            _ptr: jlong,
+        ) -> jboolean {
+            match futures::executor::block_on(async {
+                MobileDeviceManager::stop().await
+            }) {
+                Ok(_) => true as jboolean,
+                Err(_) => false as jboolean,
             }
-            true
         }
 
         #[no_mangle]
@@ -292,70 +248,48 @@ mod mobile {
                 Ok(s) => s.into(),
                 Err(_) => return 0,
             };
-
-                // Create runtime for async operations
-            let runtime = match Runtime::new() {
-                Ok(rt) => rt,
-                Err(e) => {
-                    error!("Failed to create runtime: {:?}", e);
-                    return 0;
-                }
-            };
-
-            // Load config
-            let config = match Config::load_from_str(&config_str, ConfigType::Local) {
-                Ok(c) => c,
-                Err(e) => {
-                    error!("<< Failed to load config: {:?}", e);
-                    return 0;
-                }
-            };
-
-            // Create TUN device configuration
-            // This sets up a default configuration that should work for most Android VPN setups
-            let tun_config = TunDeviceConfig {
-                fd: fd as i32,
-                address: "10.1.10.2/24".parse().unwrap(),  // VPN interface address
-                destination: Some("0.0.0.0/0".parse().unwrap()), // Route all traffic
-                mtu: Some(1500),
-            };
-
-            // Create TUN device using runtime to handle async operations
-            let mut tun = match runtime.block_on(async {
-                MobileTunDevice::new(tun_config, config).await
+            // Create and initialize the singleton instance
+            // Initialize directly without JNI frame
+            match futures::executor::block_on(async {
+                MobileDeviceManager::initialize(&config_str, fd as i32).await
             }) {
-                Ok(tun) => tun,
+                Ok(_) => 1, // Return non-zero to indicate success
                 Err(e) => {
-                    error!("<< Failed to create TUN device: {:?}", e);
-                    return 0;
+                    error!("Failed to initialize VPN: {}", e);
+                    0
                 }
-            };
-
-            // Box both the runtime and TUN device together
-            let state = Box::new((runtime, tun));
-            Box::into_raw(state) as jlong
+            }
         }
 
         #[no_mangle]
         pub extern "system" fn Java_com_icegatevpn_client_service_ShadowsocksVPN_run(
+            _env: JNIEnv,
             _: JClass,
-            ptr: jlong,
+            _ptr: jlong,
         ) -> jlong {
-
-            debug!("<< called start: ptr={:?}", ptr);
-            if ptr == 0 {
-                return VPNStatusCode::Error.tou8() as jlong;
+            match futures::executor::block_on(async {
+                MobileDeviceManager::start().await
+            }) {
+                Ok(status) => status,
+                Err(e) => {
+                    error!("Failed to start VPN: {}", e);
+                    0
+                }
             }
+        }
 
-            let state = unsafe { &mut *(ptr as *mut (Runtime, MobileTunDevice)) };
-            let (runtime, tun) = state;
-
-            debug!("<< Starting TUN device");
-            let _ = runtime.block_on(async {
-                tun.start_tunnel().await
-            });
-            let status = tun.get_status();
-            status.code.tou8() as jlong
+        #[no_mangle]
+        pub extern "system" fn Java_com_icegatevpn_client_service_ShadowsocksVPN_getStatus(
+            _env: JNIEnv,
+            _: JClass,
+            _ptr: jlong,
+        ) -> jlong {
+            match futures::executor::block_on(async {
+                MobileDeviceManager::get_status().await
+            }) {
+                Ok(status) => status.code.tou8() as jlong,
+                Err(_) => VPNStatusCode::Error.tou8() as jlong,
+            }
         }
     }
 

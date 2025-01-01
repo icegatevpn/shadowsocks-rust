@@ -15,7 +15,7 @@ use std::{
 };
 
 use log::{debug, error, trace};
-use shadowsocks::{net::TcpSocketOpts, relay::socks5::Address, ProxyClientStream};
+use shadowsocks::{net::TcpSocketOpts, relay::socks5::Address};
 use smoltcp::{
     iface::{Config as InterfaceConfig, Interface, PollResult, SocketHandle, SocketSet},
     phy::{DeviceCapabilities, Medium},
