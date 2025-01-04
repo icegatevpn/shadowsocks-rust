@@ -1,11 +1,13 @@
 use std::{io, ptr};
 use std::sync::Arc;
-use tokio::runtime::Runtime;
 use tokio::sync::Mutex;
 use log::{debug, error, info, warn};
 use std::process::Command;
 use std::net::Ipv4Addr;
+use tempfile::NamedTempFile;
 use shadowsocks::config::Mode;
+use std::net::{IpAddr};
+
 use shadowsocks_service::{
     config::{Config, ConfigType},
     local::{
@@ -14,8 +16,6 @@ use shadowsocks_service::{
         tun::{TunBuilder, StaticDeviceNetHelper},
     },
 };
-use std::net::{IpAddr};
-use tempfile::NamedTempFile;
 
 const UTUN_CONTROL_NAME: &str = "com.apple.net.utun_control";
 
@@ -30,7 +30,6 @@ pub struct MacOSTunDevice {
 
 impl MacOSTunDevice {
     pub fn new(config: Config, tun_name: &str, address: IpAddr, netmask: IpAddr) -> io::Result<Self> {
-
         Ok(MacOSTunDevice {
             config,
             tun_name: tun_name.to_string(),
@@ -79,30 +78,14 @@ impl MacOSTunDevice {
         *running = true;
         drop(running);
 
-        // Run in background
-        self.runtime.spawn(async move {
+        // Spawn the TUN device task
+        tokio::spawn(async move {
             if let Err(e) = tun.run().await {
                 error!("TUN device error: {}", e);
             }
         });
 
         Ok(())
-    }
-
-    /// Save current routing table state
-    async fn save_routing_state(&self) -> io::Result<String> {
-        let output = Command::new("netstat")
-            .arg("-rn")
-            .output()?;
-
-        if !output.status.success() {
-            return Err(io::Error::new(
-                io::ErrorKind::Other,
-                "Failed to save routing state",
-            ));
-        }
-
-        Ok(String::from_utf8_lossy(&output.stdout).to_string())
     }
 
     async fn create_tun_interface(&self) -> io::Result<()> {
@@ -124,9 +107,24 @@ impl MacOSTunDevice {
         Ok(())
     }
 
+    /// Save current routing table state
+    async fn save_routing_state(&self) -> io::Result<String> {
+        let output = Command::new("netstat")
+            .arg("-rn")
+            .output()?;
+
+        if !output.status.success() {
+            return Err(io::Error::new(
+                io::ErrorKind::Other,
+                "Failed to save routing state",
+            ));
+        }
+
+        Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    }
+
     /// Validate that a route belongs to our TUN interface
     fn validate_route_ownership(&self, route: &str) -> bool {
-        // Only delete routes that explicitly mention our TUN interface
         route.contains(&self.tun_name)
     }
 
@@ -167,21 +165,35 @@ impl MacOSTunDevice {
             ));
         }
 
-        // Add default route through TUN interface
-        let output = Command::new("route")
-            .arg("add")
-            .arg("-net")
-            .arg("0.0.0.0/1")
-            .arg("-interface")
-            .arg(&self.tun_name)
-            .output()?;
+        // Add routes specifically for our VPN traffic
+        // Split the traffic into two routes to avoid conflicting with existing routes
+        let routes_to_add = [
+            ("128.0.0.0", "128.0.0.0"), // Upper half of IPv4 space
+            ("0.0.0.0", "127.255.255.255"), // Lower half of IPv4 space
+        ];
 
-        if !output.status.success() {
-            let error = String::from_utf8_lossy(&output.stderr);
-            return Err(io::Error::new(
-                io::ErrorKind::Other,
-                format!("Failed to add route: {}", error),
-            ));
+        for (net, mask) in routes_to_add.iter() {
+            let output = Command::new("route")
+                .arg("-n")  // Use numeric addresses only
+                .arg("add")
+                .arg("-net")
+                .arg(net)
+                .arg("-netmask")
+                .arg(mask)
+                .arg("-interface")
+                .arg(&self.tun_name)
+                .output()?;
+
+            if !output.status.success() {
+                // If route addition fails, try to restore original state
+                self.restore_routing_state().await?;
+
+                let error = String::from_utf8_lossy(&output.stderr);
+                return Err(io::Error::new(
+                    io::ErrorKind::Other,
+                    format!("Failed to add route: {}", error),
+                ));
+            }
         }
 
         Ok(())
@@ -229,7 +241,7 @@ impl MacOSTunDevice {
         // Now restore the original routing table from our saved state
         if let Some(original_routes) = self.original_routes.lock().await.as_ref() {
             // Create a temporary file to store the original routing table
-            let temp_file = tempfile::NamedTempFile::new()?;
+            let temp_file = NamedTempFile::new()?;
             std::fs::write(temp_file.path(), original_routes)?;
 
             // Use route restore command to restore the original routing table
@@ -290,8 +302,9 @@ impl MacOSTunDevice {
 
 impl Drop for MacOSTunDevice {
     fn drop(&mut self) {
-        // Ensure cleanup on drop
-        let runtime = Runtime::new().unwrap();
-        runtime.block_on(self.stop()).ok();
+        // Create a new runtime just for cleanup
+        if let Ok(rt) = tokio::runtime::Runtime::new() {
+            rt.block_on(self.stop()).ok();
+        }
     }
 }
