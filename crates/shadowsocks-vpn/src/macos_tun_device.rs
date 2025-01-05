@@ -1,3 +1,4 @@
+use std::io;
 use log::{debug, error, info, warn};
 use shadowsocks::config::Mode;
 use shadowsocks_service::{
@@ -5,17 +6,12 @@ use shadowsocks_service::{
     local::{
         context::ServiceContext,
         loadbalancing::PingBalancerBuilder,
-        tun::{StaticDeviceNetHelper, TunBuilder},
+        tun::{TunBuilder},
     },
 };
-use std::io;
-use std::net::IpAddr;
-use std::os::fd::AsRawFd;
 use std::process::Command;
 use std::sync::Arc;
-use tempfile::NamedTempFile;
 use tokio::sync::Mutex;
-use tun::{AbstractDevice, AsyncDevice, Configuration, Layer};
 use serde::{Deserialize, Serialize};
 use shadowsocks::ServerAddr;
 
@@ -89,8 +85,7 @@ impl MacOSTunDevice {
         Ok(())
     }
     pub async fn start(&mut self) -> io::Result<()> {
-        let mut running = self.running.lock().await;
-        if *running {
+        if self.is_running().await {
             warn!("TUN device already running");
             return Ok(());
         }
@@ -107,7 +102,7 @@ impl MacOSTunDevice {
         let balancer = balancer.build().await?;
 
         // Create and configure TUN builder
-        let mut builder = TunBuilder::new(context, balancer);
+        let builder = TunBuilder::new(context, balancer);
 
         // Let shadowsocks create and configure the TUN interface
         let tun = builder.build().await?;
@@ -119,8 +114,7 @@ impl MacOSTunDevice {
             self.configure_routing(&name).await?;
         }
 
-        *running = true;
-        drop(running);
+        *self.running.lock().await = true;
 
         // Spawn the TUN device task
         tokio::spawn(async move {
@@ -344,8 +338,7 @@ impl MacOSTunDevice {
     }
 
     pub async fn stop(&self) -> io::Result<()> {
-        let mut running = self.running.lock().await;
-        if !*running {
+        if !self.is_running().await {
             return Ok(());
         }
 
@@ -353,7 +346,7 @@ impl MacOSTunDevice {
             self.cleanup_routing(interface).await?;
         }
 
-        *running = false;
+        *self.running.lock().await = false;
         Ok(())
     }
 

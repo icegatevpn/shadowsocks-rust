@@ -15,8 +15,8 @@ if [ -z "$BASH_VERSION" ]; then
 fi
 
 # Build targets
-#TARGETS="x86_64-linux-android aarch64-linux-android armv7-linux-androideabi i686-linux-android"
- TARGETS="aarch64-linux-android"
+TARGETS="x86_64-linux-android aarch64-linux-android armv7-linux-androideabi i686-linux-android"
+# TARGETS="aarch64-linux-android"
 declare -A ABI_MAP
 ABI_MAP["x86_64-linux-android"]="x86_64"
 ABI_MAP["aarch64-linux-android"]="arm64-v8a"
@@ -60,6 +60,7 @@ build_all() {
             cp "$lib_path" "$OUTPUT_DIR/$abi/libshadowsocks_vpn.so"
             echo "Copied from $lib_path to $OUTPUT_DIR/$abi/libshadowsocks_vpn.so"
 
+            mkdir "/Users/enoch.carter/IceGate/client/android/app/src/main/jniLibs/$abi"
             cp "$lib_path" "/Users/enoch.carter/IceGate/client/android/app/src/main/jniLibs/$abi/libshadowsocks_vpn.so"
             echo "** Copied to /Users/enoch.carter/IceGate/client/android/app/src/main/jniLibs/$abi/libshadowsocks_vpn.so"
         else

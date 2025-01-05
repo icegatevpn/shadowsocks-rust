@@ -1,4 +1,7 @@
+#[cfg(any(target_os = "android", target_os = "ios"))]
 mod mobile_tun_device;
+
+#[cfg(any(target_os = "android", target_os = "ios"))]
 mod mobile_singleton;
 
 use std::{io};

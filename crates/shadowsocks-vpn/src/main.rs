@@ -1,6 +1,5 @@
 mod macos_tun_device;
 
-use std::io;
 use log::{debug, error, info};
 use shadowsocks_service::config::{Config, ConfigType};
 use crate::macos_tun_device::MacOSTunDevice;
@@ -8,7 +7,7 @@ use tokio::signal;
 
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("debug")).init();
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
     debug!("starting server");
     //"mode": "tcp_and_udp",
     let config = Config::load_from_str(
