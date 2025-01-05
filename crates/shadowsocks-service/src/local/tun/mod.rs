@@ -189,6 +189,10 @@ pub struct Tun {
 
 impl Tun {
     /// Start serving
+    pub fn interface_name(&self) -> io::Result<String> {
+        self.device.tun_name().map_err(From::from)
+    }
+
     pub async fn run(mut self) -> io::Result<()> {
         info!(
             "shadowsocks tun device {}, mode {}",
