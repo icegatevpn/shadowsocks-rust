@@ -1,4 +1,6 @@
 mod macos_tun_device;
+#[cfg(target_os = "windows")]
+mod windows_tun_device;
 
 use log::{debug, error, info};
 use shadowsocks_service::config::{Config, ConfigType};

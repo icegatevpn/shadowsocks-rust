@@ -268,6 +268,7 @@ shadowsocks-service = { version = "1.22.0", path = "./crates/shadowsocks-service
 windows-service = { version = "0.7", optional = true }
 chrono = "0.4.38"
 serde_json = "1.0"
+windows = "0.58.0"
 #bincode = "2.0.0-rc.3"
 
 [target.'cfg(unix)'.dependencies]
