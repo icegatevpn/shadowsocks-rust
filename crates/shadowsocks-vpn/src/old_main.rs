@@ -4,75 +4,14 @@ mod windows_tun_device;
 
 use log::{debug, error, info};
 use shadowsocks_service::config::{Config, ConfigType};
-#[cfg(target_os = "macos")]
 use crate::macos_tun_device::MacOSTunDevice;
-#[cfg(target_os = "windows")]
-use crate::windows_tun_device::WindowsTunDevice;
 use tokio::signal;
-
-// Define a trait for common TUN device operations
-#[async_trait::async_trait]
-trait TunDevice {
-    async fn start(&mut self) -> std::io::Result<()>;
-    async fn stop(&self) -> std::io::Result<()>;
-    async fn is_running(&self) -> bool;
-}
-
-#[cfg(target_os = "macos")]
-#[async_trait::async_trait]
-impl TunDevice for MacOSTunDevice {
-    async fn start(&mut self) -> std::io::Result<()> {
-        MacOSTunDevice::start(self).await
-    }
-
-    async fn stop(&self) -> std::io::Result<()> {
-        MacOSTunDevice::stop(self).await
-    }
-
-    async fn is_running(&self) -> bool {
-        MacOSTunDevice::is_running(self).await
-    }
-}
-
-#[cfg(target_os = "windows")]
-#[async_trait::async_trait]
-impl TunDevice for WindowsTunDevice {
-    async fn start(&mut self) -> std::io::Result<()> {
-        WindowsTunDevice::start(self).await
-    }
-
-    async fn stop(&self) -> std::io::Result<()> {
-        WindowsTunDevice::stop(self).await
-    }
-
-    async fn is_running(&self) -> bool {
-        WindowsTunDevice::is_running(self).await
-    }
-}
-
-fn create_tun_device(config: Config) -> std::io::Result<Box<dyn TunDevice>> {
-    #[cfg(target_os = "macos")]
-    {
-        Ok(Box::new(MacOSTunDevice::new(config)?))
-    }
-    #[cfg(target_os = "windows")]
-    {
-        Ok(Box::new(WindowsTunDevice::new(config)?))
-    }
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    {
-        Err(std::io::Error::new(
-            std::io::ErrorKind::Unsupported,
-            "Platform not supported"
-        ))
-    }
-}
 
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("debug")).init();
     debug!("starting server");
-
+    //"mode": "tcp_and_udp",
     let config = Config::load_from_str(
         &format!(
             r#"{{
@@ -96,9 +35,12 @@ async fn main() -> std::io::Result<()> {
             "timeout": 300
         }}"#
         ), ConfigType::Local).expect("failed to build config");
+    // Load your shadowsocks config
+    // let config = Config::load_from_file("config.json", ConfigType::Local)
+    //     .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
 
-    // Create platform-specific TUN device
-    let mut tun = create_tun_device(config)?;
+    // Create TUN device
+    let mut tun = MacOSTunDevice::new(config)?;
 
     // Start the VPN
     info!("Starting VPN service...");
@@ -117,7 +59,6 @@ async fn main() -> std::io::Result<()> {
             error!("Unable to listen for shutdown signal: {}", err);
         }
     }
-
     // Stop the VPN
     info!("Stopping VPN service...");
     if let Err(err) = tun.stop().await {

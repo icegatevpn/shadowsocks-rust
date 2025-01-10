@@ -139,8 +139,9 @@ impl TunBuilder {
 
     /// Build Tun server
     pub async fn build(mut self) -> io::Result<Tun> {
+        debug!("build!!!!");
         self.tun_config.layer(Layer::L3).up();
-
+        debug!(" ..... 0");
         // XXX: tun2 set IFF_NO_PI by default.
         //
         // #[cfg(target_os = "linux")]
@@ -154,16 +155,16 @@ impl TunBuilder {
             Err(TunError::Io(err)) => return Err(err),
             Err(err) => return Err(io::Error::new(ErrorKind::Other, err)),
         };
-
+        debug!("..... 1");
         let (udp, udp_cleanup_interval, udp_keepalive_rx) = UdpTun::new(
             self.context.clone(),
             self.balancer.clone(),
             self.udp_expiry_duration,
             self.udp_capacity,
         );
-
+        debug!("..... 2");
         let tcp = TcpTun::new(self.context, self.balancer, device.mtu().unwrap_or(1500) as u32);
-
+        debug!("..... 3");
         Ok(Tun {
             device,
             tcp,
