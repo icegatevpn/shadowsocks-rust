@@ -1,5 +1,5 @@
 use std::io;
-use log::{debug, error, info, warn};
+use log::{debug, error, info, trace, warn};
 use shadowsocks::config::Mode;
 use shadowsocks_service::{
     config::Config,
@@ -11,9 +11,12 @@ use shadowsocks_service::{
 };
 use std::process::Command;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::Mutex;
 use serde::{Deserialize, Serialize};
+use shadowsocks::net::ConnectOpts;
 use shadowsocks::ServerAddr;
+use shadowsocks_service::config::ProtocolType;
 
 pub struct MacOSTunDevice {
     config: Config,
@@ -27,6 +30,7 @@ pub struct MacOSTunDevice {
 struct RouteState {
     default_gateway: String,
     interface: String,
+    ipv6_routes: Vec<String>,
 }
 
 impl MacOSTunDevice {
@@ -91,7 +95,17 @@ impl MacOSTunDevice {
         }
 
         // Create shadowsocks context and balancer
-        let context = Arc::new(ServiceContext::new());
+        let mut context = ServiceContext::new();//Arc::new(ServiceContext::new());
+
+        // Configure connect options for the context
+        let mut connect_opts = ConnectOpts::default();
+        connect_opts.tcp.nodelay = true;
+        connect_opts.tcp.fastopen = true;
+        connect_opts.tcp.keepalive = Some(Duration::from_secs(30));
+        context.set_connect_opts(connect_opts);
+
+        let context = Arc::new(context);
+
         let mut balancer = PingBalancerBuilder::new(context.clone(), Mode::TcpAndUdp);
 
         // Add servers from config
@@ -101,8 +115,29 @@ impl MacOSTunDevice {
 
         let balancer = balancer.build().await?;
 
+        // Get the TUN configuration from the locals
+        let tun_config = self.config.local.iter()
+            .find(|local| local.config.protocol == ProtocolType::Tun)
+            .ok_or_else(|| io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "No TUN configuration found in config"
+            ))?;
+
         // Create and configure TUN builder
-        let builder = TunBuilder::new(context, balancer);
+        let mut builder = TunBuilder::new(context, balancer);
+        builder.mode(tun_config.config.mode);
+        if let Some(address) = &tun_config.config.tun_interface_address {
+            builder.address(*address);
+        }
+        if let Some(destination) = &tun_config.config.tun_interface_destination {
+            builder.destination(*destination);
+        }
+
+        // Configure more aggressive UDP cleanup
+        builder.udp_expiry_duration(Duration::from_secs(15));  // Reduce from default 5 minutes to 30 seconds
+        // Limit maximum concurrent UDP associations
+        builder.udp_capacity(256);
+        // Configure TCP timeout and connection cleanup
 
         // Let shadowsocks create and configure the TUN interface
         let tun = builder.build().await?;
@@ -133,11 +168,12 @@ impl MacOSTunDevice {
         }
 
         let table = String::from_utf8_lossy(&output.stdout);
+        debug!("Current routing table:\n{}", table);
 
         // Parse default route info
         let default_route = table
             .lines()
-            .find(|line| line.contains("default"))
+            .find(|line| line.contains("default") && !line.contains("::"))
             .ok_or_else(|| io::Error::new(io::ErrorKind::Other, "Could not find default gateway"))?;
 
         let parts: Vec<&str> = default_route.split_whitespace().collect();
@@ -148,11 +184,20 @@ impl MacOSTunDevice {
             .ok_or_else(|| io::Error::new(io::ErrorKind::Other, "Invalid default route format"))?
             .to_string();
 
-        debug!("Saved default route - Gateway: {}, Interface: {}", gateway, interface);
+        // Save IPv6 routes
+        let ipv6_routes: Vec<String> = table
+            .lines()
+            .filter(|line| line.contains("::") && !line.trim().is_empty())
+            .map(|line| line.trim().to_string())
+            .collect();
+
+        info!("Saved route state - Gateway: {}, Interface: {}",
+            gateway, interface);
 
         Ok(RouteState {
             default_gateway: gateway,
             interface,
+            ipv6_routes,
         })
     }
     async fn clear_default_route(&self) -> io::Result<String> {
@@ -199,6 +244,10 @@ impl MacOSTunDevice {
 
         let default_gateway = self.clear_default_route().await?;
 
+        // Disable IPv6 on the interface
+        // self.disable_ipv6(interface).await?;
+        self.disable_ipv6(&route_state.interface).await?;
+
         // Now add our new default route through the TUN interface
         let add_output = Command::new("route")
             .arg("-n")
@@ -240,6 +289,67 @@ impl MacOSTunDevice {
 
         Ok(())
     }
+
+    fn device_service_name(&self, interface: &str) -> io::Result<String> {
+        // Get network service name for the interface
+        let output = Command::new("networksetup")
+            .args(["-listallhardwareports"])
+            .output()?;
+        let output_str = String::from_utf8_lossy(&output.stdout);
+        let mut service_name = None;
+        // Parse output to find service name for our interface
+        for chunk in output_str.split("\n\n") {
+            if chunk.contains(&format!("Device: {}", interface)) {
+                if let Some(line) = chunk.lines().next() {
+                    service_name = line.strip_prefix("Hardware Port: ").map(String::from);
+                }
+            }
+        }
+        let service = service_name.ok_or_else(|| {
+            io::Error::new(io::ErrorKind::NotFound,
+                           format!("Could not find network service for interface {}", interface))
+        })?;
+        Ok(service)
+    }
+
+    async fn disable_ipv6(&self, original_interface: &str) -> io::Result<()> {
+        debug!("Disabling IPv6 on interface: {}", original_interface);
+        // Get network service name for the interface
+
+        let service = self.device_service_name(original_interface)?;
+        info!("Disabling IPv6 on service: {} (interface: {})", service, original_interface);
+
+        // Disable IPv6 on the network service
+        let output = Command::new("networksetup")
+            .args(["-setv6off", &service])
+            .output()?;
+
+        if !output.status.success() {
+            warn!("Failed to disable IPv6 on service {} (interface {}): {}",
+                service, original_interface,
+                String::from_utf8_lossy(&output.stderr));
+        }
+
+        Ok(())
+    }
+    async fn restore_ipv6(&self, original_interface: &str) -> io::Result<()> {
+        // Get network service name for the interface
+        let service = self.device_service_name(original_interface)?;
+        info!("Restoring IPv6 on service: {} (interface: {})", service, original_interface);
+
+        // Re-enable IPv6 on the network service
+        let output = Command::new("networksetup")
+            .args(["-setv6automatic", &service])
+            .output()?;
+
+        if !output.status.success() {
+            warn!("Failed to restore IPv6 on service {} (interface {}): {}",
+                service, original_interface,
+                String::from_utf8_lossy(&output.stderr));
+        }
+
+        Ok(())
+    }
     async fn restore_routing_state(&self) -> io::Result<()> {
         let route_state: RouteState = if let Some(saved_state) = self.original_routes.lock().await.as_ref() {
             serde_json::from_str(saved_state)?
@@ -271,13 +381,36 @@ impl MacOSTunDevice {
 
         // Verify the restoration
         let check_output = Command::new("netstat").arg("-rn").output()?;
-        debug!("Final route table: {}", String::from_utf8_lossy(&check_output.stdout));
+        trace!("Final route table: {}", String::from_utf8_lossy(&check_output.stdout));
 
         Ok(())
     }
 
     async fn cleanup_routing(&self, interface: &str) -> io::Result<()> {
         debug!("Cleaning up routing state for: {}", interface);
+        // Get the original state first - we need this for IPv6 restoration
+        let route_state = match self.original_routes.lock().await.as_ref() {
+            Some(state_str) => match serde_json::from_str::<RouteState>(state_str) {
+                Ok(state) => state,
+                Err(e) => {
+                    error!("Failed to parse original route state: {}", e);
+                    return Err(io::Error::new(io::ErrorKind::Other, "Failed to parse original route state"));
+                }
+            },
+            None => {
+                error!("No original route state found");
+                return Err(io::Error::new(io::ErrorKind::Other, "No original route state found"));
+            }
+        };
+        // First try to restore IPv6 on the original interface
+        let ipv6_result = self.restore_ipv6(&route_state.interface).await;
+        if let Err(ref e) = ipv6_result {
+            error!("Failed to restore IPv6, but continuing with other cleanup: {}", e);
+            // Don't return early - continue with other cleanup
+        }
+
+        debug!("Removing VPN routes and restoring original routing...");
+
         // Remove the default route through our TUN interface
         let output = Command::new("route")
             .arg("-n")
@@ -288,7 +421,7 @@ impl MacOSTunDevice {
             .arg(interface)
             .output()?;
 
-        debug!("Remove 1 default route: {}",  String::from_utf8_lossy(&output.stdout));
+        debug!("Remove default route: {}",  String::from_utf8_lossy(&output.stdout));
 
         if !output.status.success() {
             warn!(
@@ -321,7 +454,7 @@ impl MacOSTunDevice {
                 .arg("-host")
                 .arg(&server_addr)
                 .output()?;
-            debug!("Remove 2 default route:({}) {}",server_addr,  String::from_utf8_lossy(&output.stdout));
+            debug!("Remove other default route:({}) {}",server_addr,  String::from_utf8_lossy(&output.stdout));
 
             if !output.status.success() {
                 warn!(
@@ -331,8 +464,16 @@ impl MacOSTunDevice {
                 );
             }
         }
+        // Restore original routing state
+        if let Err(e) = self.restore_routing_state().await {
+            error!("Failed to restore original routing state: {}", e);
+            return Err(e);
+        }
 
-        self.restore_routing_state().await?;
+        // Verify IPv6 is enabled
+        self.verify_ipv6_enabled(&route_state.interface).await?;
+
+        info!("Cleanup completed successfully");
 
         Ok(())
     }
@@ -352,5 +493,27 @@ impl MacOSTunDevice {
 
     pub async fn is_running(&self) -> bool {
         *self.running.lock().await
+    }
+
+    async fn verify_ipv6_enabled(&self, interface: &str) -> io::Result<()> {
+        // Get network service name
+        let service = self.device_service_name(interface)?;
+
+        // Check IPv6 status
+        let output = Command::new("networksetup")
+            .args(["-getinfo", &service])
+            .output()?;
+
+        let info = String::from_utf8_lossy(&output.stdout);
+
+        if !info.contains("IPv6: Automatic") {
+            warn!("IPv6 may not be properly enabled on {}. Current network info:\n{}", service, info);
+            // Try one more time to enable it
+            let _ = Command::new("networksetup")
+                .args(["-setv6automatic", &service])
+                .output()?;
+        }
+
+        Ok(())
     }
 }

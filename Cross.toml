@@ -50,6 +50,11 @@ pre-build = [
     "apt-get update",
     "apt-get install -y libsqlite3-dev"
 ]
+
+[target.aarch64-pc-windows-msvc]
+image = "ghcr.io/cross-rs/aarch64-pc-windows-msvc:latest"
+dockerfile = "./docker/windows/Dockerfile"
+
 #pre-build = [
 #    # Install build dependencies including SQLite
 #    "apt-get update && apt-get install -y mingw-w64 mingw-w64-tools zip",
