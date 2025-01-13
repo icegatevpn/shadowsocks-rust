@@ -42,6 +42,7 @@ build_all() {
         cargo ndk --platform 25 \
               --target "$target" \
                build \
+              --lib \
               --package shadowsocks-vpn \
               --no-default-features \
               --features "$FEATURES" \
@@ -73,7 +74,7 @@ build_all() {
 
 # Main execution
 echo "Checking dependencies..."
-check_dependencies
+#check_dependencies
 
 echo "Building libraries using cross..."
 echo "Project path: $RUST_PROJECT_PATH"

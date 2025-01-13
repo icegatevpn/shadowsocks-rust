@@ -1,15 +1,21 @@
-use crate::TunError;
 use log::{debug, error, info};
 use shadowsocks::config::Mode;
 use shadowsocks_service::config::Config;
 use shadowsocks_service::local::context::ServiceContext;
 use shadowsocks_service::local::loadbalancing::{PingBalancerBuilder};
 use shadowsocks_service::local::tun::{StaticDeviceNetHelper, TunBuilder};
-use std::{sync::Arc};
+use std::{io, sync::Arc};
 use std::fmt::Debug;
 use tokio::sync::Mutex;
 use ipnet::IpNet;
 use futures::executor::block_on;
+
+#[derive(Debug)]
+pub enum TunError {
+    IoError(io::Error),
+    ConfigError(&'static str),
+    DeviceError(&'static str),
+}
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]

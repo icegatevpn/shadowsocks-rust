@@ -1,340 +1,304 @@
-#[cfg(any(target_os = "android", target_os = "ios"))]
-mod mobile_tun_device;
+use std::cell::RefCell;
 
 #[cfg(any(target_os = "android", target_os = "ios"))]
 mod mobile_singleton;
 
-use std::{io};
-use std::sync::Arc;
+// Thread-local storage for error messages
+thread_local! {
+    static LAST_ERROR: RefCell<Option<String>> = RefCell::new(None);
+}
+
+#[cfg(not(target_os = "android"))]
+fn set_last_error<E: std::fmt::Display>(err: E) {
+    LAST_ERROR.with(|e| {
+        *e.borrow_mut() = Some(err.to_string());
+    });
+}
+
+#[cfg(target_os = "macos")]
+mod macos_tun_device;
+#[cfg(target_os = "android")]
+mod mobile_tun_device;
+#[cfg(target_os = "windows")]
+mod windows_tun_device;
+
+#[cfg(target_os = "android")]
+use crate::mobile_singleton::MobileDeviceManager;
+#[cfg(not(target_os = "android"))]
+use log::{debug, error, info};
+#[cfg(not(target_os = "android"))]
+use std::ptr::{self, NonNull};
+#[cfg(not(target_os = "android"))]
+use std::{
+    ffi::{c_char, CStr, CString},
+    sync::Arc,
+};
 use tokio::runtime::Runtime;
-use shadowsocks_service::{config::Config, run_local};
-use tokio::sync::oneshot;
-use std::sync::atomic::{AtomicBool, Ordering};
-use log::{debug, error, info, warn};
-use crate::VPNError::ConfigError;
 
-pub struct ShadowsocksVPN {
+#[cfg(target_os = "macos")]
+use crate::macos_tun_device::MacOSTunDevice;
+#[cfg(target_os = "windows")]
+use crate::windows_tun_device::WindowsTunDevice;
+#[cfg(not(target_os = "android"))]
+use shadowsocks_service::config::{Config, ConfigType};
+
+// Opaque type for the VPN context
+use tokio::task::JoinHandle;
+
+// Opaque type for the VPN context
+#[repr(C)]
+pub struct VpnContext {
     runtime: Runtime,
-    config: Config,
-    running: Arc<AtomicBool>,
-    shutdown_tx: Option<oneshot::Sender<()>>,
-}
-
-#[derive(Debug, thiserror::Error)]
-pub enum VPNError {
-    #[error("Configuration error: {0}")]
-    ConfigError(String),
-
-    #[error("Runtime error: {0}")]
-    RuntimeError(String),
-
-    #[error("Connection error: {0}")]
-    ConnectionError(String)
-}
-
-#[derive(Debug)]
-pub enum TunError {
-    IoError(io::Error),
-    ConfigError(&'static str),
-    DeviceError(&'static str),
-}
-
-impl From<io::Error> for TunError {
-    fn from(error: io::Error) -> Self {
-        TunError::IoError(error)
-    }
-}
-
-impl ShadowsocksVPN {
-    pub fn new(config: Config) -> Result<Self, VPNError> {
-        match config.check_integrity() {
-            Ok(_) => {
-                let runtime = Runtime::new()
-                    .map_err(|e| VPNError::RuntimeError(e.to_string()))?;
-
-                Ok(Self {
-                    runtime,
-                    config,
-                    running: Arc::new(AtomicBool::new(false)),
-                    shutdown_tx: None,
-                })
-            },
-            Err(err) => {
-                error!("{}", ConfigError(format!("{:?}", err)));
-                Err(VPNError::ConfigError(format!("{:?}", err)))
-            }
-        }
-    }
-
-    pub fn start(&mut self) -> Result<(), VPNError> {
-        debug!("<< starting VPN");
-        if self.running.load(Ordering::Acquire) {
-            warn!("VPN already running");
-            return Ok(());
-        }
-        let config = self.config.clone();
-        let running = self.running.clone();
-        // Create a shutdown channel
-        let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        self.shutdown_tx = Some(shutdown_tx);
-
-        debug!("starting server");
-        // Spawn the server in the runtime
-        self.runtime.spawn(async move {
-            debug!("in runtime");
-            running.store(true, Ordering::Release);
-            info!("VPN runtime started: ${:?}", config);
-
-            let server = run_local(config);
-            let shutdown_rx = Box::pin(shutdown_rx);
-            debug!("Local server started");
-
-            tokio::select! {
-                result = server => {
-                    match result {
-                        Ok(_) => debug!("Server completed normally"),
-                        Err(e) => error!("Server error: {}", e),
-                    }
-                }
-                _ = shutdown_rx => {
-                    debug!("Received shutdown signal");
-                }
-            }
-
-            running.store(false, Ordering::Release);
-        });
-
-        Ok(())
-    }
-
-    pub fn stop(&mut self) -> Result<(), VPNError> {
-        if !self.running.load(Ordering::Acquire) {
-            debug!("VPN not running");
-            return Ok(());
-        }
-
-        // Send shutdown signal
-        if let Some(tx) = self.shutdown_tx.take() {
-            let _ = tx.send(());
-        }
-
-        // Wait for the server to stop
-        let running = self.running.clone();
-        self.runtime.block_on(async move {
-            while running.load(Ordering::Acquire) {
-                // todo, do wait step magic
-                tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-            }
-        });
-
-        debug!("VPN stopped");
-        Ok(())
-    }
-
-    pub fn is_running(&self) -> bool {
-        self.running.load(Ordering::Acquire)
-    }
-
-    // Add methods for managing the VPN connection
-    pub fn update_config(&mut self, config: Config) -> Result<(), VPNError> {
-        if self.is_running() {
-            self.stop()?;
-        }
-        self.config = config;
-        if !self.is_running() {//self.running.load(Ordering::Acquire) {
-            self.start()?;
-        }
-        Ok(())
-    }
-}
-
-// Implement common VPN functionality
-pub trait VPNService {
-    fn connect(&mut self) -> Result<(), VPNError>;
-    fn disconnect(&mut self) -> Result<(), VPNError>;
-    fn is_connected(&self) -> bool;
-    fn get_status(&self) -> VPNStatus;
-}
-
-#[derive(Debug, Clone)]
-pub enum VPNStatus {
-    Connected,
-    Connecting,
-    Disconnected,
-    Error(String)
-}
-
-impl VPNService for ShadowsocksVPN {
-    fn connect(&mut self) -> Result<(), VPNError> {
-        self.start()
-    }
-
-    fn disconnect(&mut self) -> Result<(), VPNError> {
-        self.stop()
-    }
-
-    fn is_connected(&self) -> bool {
-        self.is_running()
-    }
-
-    fn get_status(&self) -> VPNStatus {
-        if self.is_running() {
-            VPNStatus::Connected
-        } else {
-            VPNStatus::Disconnected
-        }
-    }
-}
-
-
-#[cfg(any(target_os = "android", target_os = "ios"))]
-mod mobile {
-
-    // Android-specific JNI interface
     #[cfg(target_os = "android")]
-    pub mod android {
-        use jni::JNIEnv;
-        use jni::objects::{JClass, JString};
-        use jni::sys::{jboolean, jint, jlong};
-        use log::{debug, error, LevelFilter};
-        use crate::mobile_singleton::MobileDeviceManager;
-        use crate::mobile_tun_device::VPNStatusCode;
+    device: MobileDeviceManager,
+    #[cfg(target_os = "macos")]
+    device: MacOSTunDevice,
+    #[cfg(target_os = "windows")]
+    device: WindowsTunDevice,
+    vpn_task: Option<JoinHandle<std::io::Result<()>>>,
+}
 
-        pub fn init_logging() {
-            android_logger::init_once(
-                android_logger::Config::default()
-                    .with_max_level(LevelFilter::Debug)
-                    .with_tag("ShadowsocksVPN"),
-            );
+#[repr(C)]
+#[derive(Debug)]
+pub enum VpnError {
+    ConfigError = 1,
+    RuntimeError = 2,
+    DeviceError = 3,
+}
+
+#[no_mangle]
+#[cfg(not(target_os = "android"))]
+pub extern "C" fn vpn_last_error() -> *mut c_char {
+    let error_msg = LAST_ERROR
+        .with(|e| e.borrow().clone())
+        .unwrap_or_else(|| "No error".to_string());
+
+    match CString::new(error_msg) {
+        Ok(c_str) => c_str.into_raw(),
+        Err(_) => ptr::null_mut(),
+    }
+}
+
+#[no_mangle]
+#[cfg(not(target_os = "android"))]
+pub extern "C" fn vpn_create(config_json: *const c_char) -> *mut VpnContext {
+    if config_json.is_null() {
+        return ptr::null_mut();
+    }
+
+    // Convert C string to Rust string
+    let config_str = unsafe {
+        match CStr::from_ptr(config_json).to_str() {
+            Ok(s) => s,
+            Err(_) => return ptr::null_mut(),
         }
+    };
 
-        #[no_mangle]
-        pub extern "system" fn Java_com_icegatevpn_client_service_ShadowsocksVPN_isRunning(
-            _env: JNIEnv,
-            _: JClass,
-            _ptr: jlong
-        ) -> jboolean {
-            debug!("Shadowsocks VPN check isRunning");
-            match futures::executor::block_on(async {
-                MobileDeviceManager::get_status().await
-            }) {
-                Ok(s) => (s.code.tou8() > 0 && s.code.tou8() <3) as jboolean,
-                Err(_) => false as jboolean,
+    // Create runtime
+    let runtime = match Runtime::new() {
+        Ok(rt) => rt,
+        Err(e) => {
+            set_last_error(format!("Failed to create runtime: {}", e));
+            return ptr::null_mut();
+        }
+    };
+
+    // Parse config
+    let config = match Config::load_from_str(config_str, ConfigType::Local) {
+        Ok(c) => c,
+        Err(e) => {
+            set_last_error(format!("Failed to parse config: {}", e));
+            return ptr::null_mut();
+        }
+    };
+
+    #[cfg(target_os = "macos")]
+    let device = match MacOSTunDevice::new(config) {
+        Ok(d) => d,
+        Err(_) => return ptr::null_mut(),
+    };
+
+    #[cfg(target_os = "windows")]
+    let device = match WindowsTunDevice::new(config) {
+        Ok(d) => d,
+        Err(_) => return ptr::null_mut(),
+    };
+
+    // Create context
+    let context = Box::new(VpnContext {
+        runtime,
+        device,
+        vpn_task: None,
+    });
+
+    Box::into_raw(context)
+}
+
+#[no_mangle]
+#[cfg(not(target_os = "android"))]
+pub extern "C" fn vpn_start(context: *mut VpnContext) -> bool {
+    let context = match unsafe { context.as_mut() } {
+        Some(c) => c,
+        None => {
+            set_last_error("Null context pointer");
+            return false;
+        }
+    };
+
+    // Create handle for spawning the VPN task
+    let handle = context.runtime.spawn(async {
+        // let result = context.device.start_tunnel().await;
+        #[cfg(target_os = "android")]
+        return Err(VpnError::RuntimeError);
+
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        return context.device.start().await;
+        // let result = context.device.start().await;
+
+        // result
+    });
+
+    // Store handle for potential cancellation/cleanup
+    context.runtime.spawn(async move {
+        match handle.await {
+            Ok(Ok(_)) => {
+                debug!("VPN service running successfully");
+            }
+            Ok(Err(e)) => {
+                let err_msg = format!("VPN service error: {:?}", e);
+                error!("{}", err_msg);
+                set_last_error(err_msg);
+            }
+            Err(e) => {
+                let err_msg = format!("VPN task join error: {}", e);
+                error!("{}", err_msg);
+                set_last_error(err_msg);
             }
         }
+    });
 
-        #[no_mangle]
-        pub extern "system" fn Java_com_icegatevpn_client_service_ShadowsocksVPN_stop(
-            _env: JNIEnv,
-            _: JClass,
-            _ptr: jlong,
-        ) -> jboolean {
-            match futures::executor::block_on(async {
-                MobileDeviceManager::stop().await
-            }) {
-                Ok(_) => true as jboolean,
-                Err(_) => false as jboolean,
-            }
+    true
+}
+
+#[no_mangle]
+#[cfg(not(target_os = "android"))]
+pub extern "C" fn vpn_stop(context: *mut VpnContext) -> bool {
+    let context = match unsafe { context.as_mut() } {
+        Some(c) => c,
+        None => {
+            set_last_error("Null context pointer");
+            return false;
         }
+    };
 
-        #[no_mangle]
-        pub extern "system" fn Java_com_icegatevpn_client_service_ShadowsocksVPN_create(
-            mut env: JNIEnv,
-            _: JClass,
-            config: JString,
-            fd: jint,
-        ) -> jlong {
+    // Abort any running VPN task
+    if let Some(task) = context.vpn_task.take() {
+        task.abort();
+    }
 
-            init_logging();
-
-            let config_str: String = match env.get_string(&config) {
-                Ok(s) => s.into(),
-                Err(_) => return 0,
-            };
-            // Create and initialize the singleton instance
-            // Initialize directly without JNI frame
-            match futures::executor::block_on(async {
-                MobileDeviceManager::initialize(&config_str, fd as i32).await
-            }) {
-                Ok(_) => 1, // Return non-zero to indicate success
-                Err(e) => {
-                    error!("Failed to initialize VPN: {}", e);
-                    0
-                }
-            }
+    // Stop the VPN device
+    match context.runtime.block_on(async {
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        context.device.stop().await
+    }) {
+        Ok(_) => true,
+        Err(e) => {
+            let err_msg = format!("Failed to stop VPN: {}", e);
+            error!("{}", err_msg);
+            set_last_error(err_msg);
+            false
         }
+    }
+}
 
-        #[no_mangle]
-        pub extern "system" fn Java_com_icegatevpn_client_service_ShadowsocksVPN_run(
-            _env: JNIEnv,
-            _: JClass,
-            _ptr: jlong,
-        ) -> jlong {
-            match futures::executor::block_on(async {
-                MobileDeviceManager::start().await
-            }) {
-                Ok(status) => status,
-                Err(e) => {
-                    error!("Failed to start VPN: {}", e);
-                    0
-                }
-            }
+#[no_mangle]
+pub extern "C" fn vpn_destroy(context: *mut VpnContext) {
+    if !context.is_null() {
+        unsafe {
+            drop(Box::from_raw(context));
         }
+    }
+}
 
-        #[no_mangle]
-        pub extern "system" fn Java_com_icegatevpn_client_service_ShadowsocksVPN_getStatus(
-            _env: JNIEnv,
-            _: JClass,
-            _ptr: jlong,
-        ) -> jlong {
-            match futures::executor::block_on(async {
-                MobileDeviceManager::get_status().await
-            }) {
-                Ok(status) => status.code.tou8() as jlong,
-                Err(_) => VPNStatusCode::Error.tou8() as jlong,
+#[cfg(target_os = "android")]
+pub mod android {
+    use super::*;
+    use jni::objects::{JClass, JString};
+    use jni::sys::{jboolean, jint, jlong};
+    use jni::JNIEnv;
+    use log::{debug, error, LevelFilter};
+
+    pub fn init_logging() {
+        android_logger::init_once(
+            android_logger::Config::default()
+                .with_max_level(LevelFilter::Debug)
+                .with_tag("ShadowsocksVPN"),
+        );
+    }
+
+    #[no_mangle]
+    pub extern "system" fn Java_com_icegatevpn_client_service_ShadowsocksVPN_create(
+        mut env: JNIEnv,
+        _: JClass,
+        config: JString,
+        fd: jint,
+    ) -> jlong {
+        init_logging();
+
+        let config_str: String = match env.get_string(&config) {
+            Ok(s) => s.into(),
+            Err(_) => return 0,
+        };
+        // Create and initialize the singleton instance
+        // Initialize directly without JNI frame
+        match futures::executor::block_on(
+            async { MobileDeviceManager::initialize(&config_str, fd as i32).await }
+        ) {
+            Ok(_) => 1, // Return non-zero to indicate success
+            Err(e) => {
+                error!("Failed to initialize VPN: {}", e);
+                0
             }
         }
     }
 
-    // iOS-specific interface
-    #[cfg(target_os = "ios")]
-    pub mod ios {
-        use super::*;
-        use std::ffi::{c_char, CStr};
-
-        #[no_mangle]
-        pub extern "C" fn ss_vpn_create(config_json: *const c_char, fd: i32) -> *mut MobileVPN {
-            let config_str = unsafe {
-                if config_json.is_null() {
-                    return std::ptr::null_mut();
-                }
-                match CStr::from_ptr(config_json).to_str() {
-                    Ok(s) => s,
-                    Err(_) => return std::ptr::null_mut(),
-                }
-            };
-
-            let mut vpn = match MobileVPN::new(Config::load_from_str(config_str, ConfigType::Local).unwrap()) {
-                Ok(vpn) => vpn,
-                Err(_) => return std::ptr::null_mut(),
-            };
-
-            if vpn.setup_tun(fd).is_err() {
-                return std::ptr::null_mut();
+    #[no_mangle]
+    pub extern "system" fn Java_com_icegatevpn_client_service_ShadowsocksVPN_start(
+        _: JNIEnv,
+        _: JClass,
+        _: jlong,
+    ) -> jlong {
+        match futures::executor::block_on(async { MobileDeviceManager::start().await }) {
+            Ok(status) => status,
+            Err(e) => {
+                error!("Failed to start VPN: {}", e);
+                0
             }
-
-            Box::into_raw(Box::new(vpn))
         }
+    }
 
-        #[no_mangle]
-        pub extern "C" fn ss_vpn_start(vpn: *mut MobileVPN) -> bool {
-            let vpn = unsafe {
-                if vpn.is_null() {
-                    return false;
-                }
-                &mut *vpn
-            };
-            vpn.start().is_ok()
+    #[no_mangle]
+    pub extern "system" fn Java_com_icegatevpn_client_service_ShadowsocksVPN_isRunning(
+        _env: JNIEnv,
+        _: JClass,
+        _ptr: jlong,
+    ) -> jboolean {
+        debug!("Shadowsocks VPN check isRunning");
+        match futures::executor::block_on(async { MobileDeviceManager::get_status().await }) {
+            Ok(s) => (s.code.tou8() > 0 && s.code.tou8() < 3) as jboolean,
+            Err(_) => false as jboolean,
+        }
+    }
+
+    #[no_mangle]
+    pub extern "system" fn Java_com_icegatevpn_client_service_ShadowsocksVPN_stop(
+        _: JNIEnv,
+        _: JClass,
+        _: jlong,
+    ) -> jboolean {
+        match futures::executor::block_on(async { MobileDeviceManager::stop().await }) {
+            Ok(_) => true as jboolean,
+            Err(_) => false as jboolean,
         }
     }
 }

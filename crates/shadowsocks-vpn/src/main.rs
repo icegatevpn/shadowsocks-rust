@@ -2,37 +2,13 @@ mod macos_tun_device;
 #[cfg(target_os = "windows")]
 mod windows_tun_device;
 
+use std::ffi::CString;
 use log::{debug, error, info};
 use shadowsocks_service::config::{Config, ConfigType};
-#[cfg(target_os = "macos")]
-use crate::macos_tun_device::MacOSTunDevice;
 #[cfg(target_os = "windows")]
 use crate::windows_tun_device::WindowsTunDevice;
 use tokio::signal;
 
-// Define a trait for common TUN device operations
-#[async_trait::async_trait]
-trait TunDevice {
-    async fn start(&mut self) -> std::io::Result<()>;
-    async fn stop(&self) -> std::io::Result<()>;
-    async fn is_running(&self) -> bool;
-}
-
-#[cfg(target_os = "macos")]
-#[async_trait::async_trait]
-impl TunDevice for MacOSTunDevice {
-    async fn start(&mut self) -> std::io::Result<()> {
-        MacOSTunDevice::start(self).await
-    }
-
-    async fn stop(&self) -> std::io::Result<()> {
-        MacOSTunDevice::stop(self).await
-    }
-
-    async fn is_running(&self) -> bool {
-        MacOSTunDevice::is_running(self).await
-    }
-}
 
 #[cfg(target_os = "windows")]
 #[async_trait::async_trait]
@@ -50,44 +26,52 @@ impl TunDevice for WindowsTunDevice {
     }
 }
 
-fn create_tun_device(config: Config) -> std::io::Result<Box<dyn TunDevice>> {
-    #[cfg(target_os = "macos")]
-    {
-        Ok(Box::new(MacOSTunDevice::new(config)?))
-    }
-    #[cfg(target_os = "windows")]
-    {
-        Ok(Box::new(WindowsTunDevice::new(config)?))
-    }
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    {
-        Err(std::io::Error::new(
-            std::io::ErrorKind::Unsupported,
-            "Platform not supported"
-        ))
-    }
-}
+use std::process::Command;
+use std::{thread};
+use std::io::ErrorKind;
+use std::sync::{Arc, Condvar, Mutex};
+#[cfg(not(target_os = "android"))]
+use shadowsocks_vpn::{vpn_create, vpn_destroy, vpn_last_error, vpn_start, vpn_stop};
 
-#[tokio::main]
-async fn main() -> std::io::Result<()> {
+#[cfg(not(target_os = "android"))]
+fn main() -> std::io::Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
-    debug!("starting server");
 
-    // Set up panic hook for cleanup
-    let default_panic = std::panic::take_hook();
-    std::panic::set_hook(Box::new(move |panic_info| {
-        error!("Panic occurred: {}", panic_info);
-        default_panic(panic_info);
-    }));
+    let pair = Arc::new((Mutex::new(true), Condvar::new()));
+    let pair2 = pair.clone();
+    // Set up signal handlers
+    #[cfg(unix)]
+    {
+        use signal_hook::iterator::Signals;
+        use signal_hook::consts::{SIGINT, SIGTERM};
 
-    // Set up exit hook
-    let _cleanup_guard = scopeguard::guard((), |_| {
-        debug!("Running cleanup on program exit");
-    });
+        let mut signals = Signals::new(&[SIGINT, SIGTERM]).unwrap();
+        thread::spawn(move || {
+            for sig in signals.forever() {
+                info!("Received signal {}", sig);
+                let (lock, cvar) = &*pair2;
+                let mut running = lock.lock().unwrap();
+                *running = false;
+                cvar.notify_all();
+                break;
+            }
+        });
+    }
 
-    let config = Config::load_from_str(
-        &format!(
-            r#"{{
+    #[cfg(windows)]
+    {
+        let pair3 = pair2.clone();
+        ctrlc::set_handler(move || {
+            info!("Received Ctrl+C");
+            let (lock, cvar) = &*pair3;
+            let mut running = lock.lock().unwrap();
+            *running = false;
+            cvar.notify_all();
+        }).expect("Error setting Ctrl-C handler");
+    }
+
+    let config = format!(
+        r#"{{
             "server": "165.232.76.105",
             "server_port": 8388,
             "password": "xXsEZIlaGPEtkuDZ4ZKM2lcFqtY74WcuUeLo+1384Gc=:0X7im12oWeEc1kpA6JKS9ATf4SNZl/cObLgicta1T+o=",
@@ -109,51 +93,28 @@ async fn main() -> std::io::Result<()> {
             "keep_alive": 15,
             "timeout": 300
         }}"#
-        ), ConfigType::Local).expect("failed to build config");
+    );
+    let c_string = CString::new(config).expect("CString::new failed");
+    let vpn = vpn_create(c_string.as_ptr());
 
-    // Create platform-specific TUN device
-    let mut tun = create_tun_device(config)?;
-
-    // Start the VPN
-    info!("Starting VPN service...");
-    if let Err(err) = tun.start().await {
-        error!("Failed to start VPN: {}", err);
-        return Err(err);
-    }
-    info!("VPN service started successfully. Press Ctrl+C to stop.");
-
-    // Wait for shutdown signals
-    #[cfg(unix)]
-    let terminate = async {
-        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-            .unwrap()
-            .recv()
-            .await;
-    };
-
-    #[cfg(not(unix))]
-    let terminate = std::future::pending::<()>();
-
-    let ctrl_c = async {
-        signal::ctrl_c().await.unwrap();
-    };
-
-    tokio::select! {
-        _ = ctrl_c => {
-            info!("Received Ctrl+C signal, stopping VPN...");
-        }
-        _ = terminate => {
-            info!("Received terminate signal, stopping VPN...");
-        }
+    if !vpn_start(vpn) {
+        vpn_destroy(vpn);
+        let error = vpn_last_error();
+        error!("Error: {:?}\n", error);
+        return Err(std::io::Error::new(ErrorKind::InvalidData,"failed"))
     }
 
-    // Stop the VPN
-    info!("Stopping VPN service...");
-    if let Err(err) = tun.stop().await {
-        error!("Error while stopping VPN: {}", err);
-        return Err(err);
+    debug!("VPN is Running...");
+    // Wait for shutdown signal
+    let (lock, cvar) = &*pair;
+    let mut running = lock.lock().unwrap();
+    while *running {
+        running = cvar.wait(running).unwrap();
     }
-    info!("VPN service stopped successfully");
 
+    info!("VPN stopped successfully");
+
+    vpn_stop(vpn);
+    vpn_destroy(vpn);
     Ok(())
 }
