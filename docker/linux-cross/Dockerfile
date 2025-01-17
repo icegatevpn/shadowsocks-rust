@@ -40,17 +40,33 @@ RUN update-ca-certificates && \
     curl -L 'https://www.sqlite.org/2024/sqlite-amalgamation-3450100.zip' -o sqlite.zip && \
     unzip sqlite.zip && \
     cd sqlite-amalgamation-3450100 && \
-#        x86_64-w64-mingw32-gcc -c sqlite3.c -o sqlite3.o && \
-#        x86_64-w64-mingw32-ar rcs libsqlite3.a sqlite3.o && \
-#        cp libsqlite3.a /usr/x86_64-w64-mingw32/lib/ && \
-#        i686-w64-mingw32-gcc -c sqlite3.c -o sqlite3_32.o && \
-#        i686-w64-mingw32-ar rcs libsqlite3_32.a sqlite3_32.o && \
-#        cp libsqlite3_32.a /usr/i686-w64-mingw32/lib/libsqlite3.a && \
-    aarch64-linux-android-gcc -c sqlite3.c -o sqlite3.o && \
-    aarch64-linux-android-ar rcs libsqlite3.a sqlite3.o && \
-    cp libsqlite3.a /android-ndk/sysroot/usr/lib/aarch64-linux-android/ && \
+    x86_64-w64-mingw32-gcc -c sqlite3.c -o sqlite3.o && \
+    x86_64-w64-mingw32-ar rcs libsqlite3.a sqlite3.o && \
+    cp libsqlite3.a /usr/x86_64-w64-mingw32/lib/ && \
+    i686-w64-mingw32-gcc -c sqlite3.c -o sqlite3_32.o && \
+    i686-w64-mingw32-ar rcs libsqlite3_32.a sqlite3_32.o && \
+    cp libsqlite3_32.a /usr/i686-w64-mingw32/lib/libsqlite3.a && \
     cd .. && \
     rm -rf sqlite-amalgamation-3450100 sqlite.zip
+#RUN update-ca-certificates && \
+#    curl -L 'https://www.sqlite.org/2024/sqlite-amalgamation-3450100.zip' -o sqlite.zip && \
+#    unzip sqlite.zip
+#
+#RUN cd sqlite-amalgamation-3450100
+##        x86_64-w64-mingw32-gcc -c sqlite3.c -o sqlite3.o && \
+##        x86_64-w64-mingw32-ar rcs libsqlite3.a sqlite3.o && \
+##        cp libsqlite3.a /usr/x86_64-w64-mingw32/lib/ && \
+##        i686-w64-mingw32-gcc -c sqlite3.c -o sqlite3_32.o && \
+##        i686-w64-mingw32-ar rcs libsqlite3_32.a sqlite3_32.o && \
+##        cp libsqlite3_32.a /usr/i686-w64-mingw32/lib/libsqlite3.a && \
+#RUN gcc -c sqlite3.c -o sqlite3.o && \
+#    ar rcs libsqlite3.a sqlite3.o
+##RUN aarch64-linux-android-gcc -c sqlite3.c -o sqlite3.o && \
+##    aarch64-linux-android-ar rcs libsqlite3.a sqlite3.o
+#
+#RUN cp libsqlite3.a /android-ndk/sysroot/usr/lib/aarch64-linux-android/ && \
+#    cd .. && \
+#    rm -rf sqlite-amalgamation-3450100 sqlite.zip
 
 # Make sure the libraries are in the linker search path
 #ENV CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS="-L /android-ndk/sysroot/usr/lib/aarch64-linux-android"

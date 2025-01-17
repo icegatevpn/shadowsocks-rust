@@ -24,6 +24,7 @@ use tokio::{
     time::{timeout, Duration},
 };
 use uuid::Uuid;
+use shadowsocks_service::mysql_db::ServerConfig;
 
 #[derive(Debug, Deserialize)]
 struct ManagerCommand {
@@ -620,6 +621,7 @@ impl IntoApiError for &str {
 #[derive(Debug, Serialize)]
 struct AccessKeyListResponse {
     access_keys: Vec<AccessKey>,
+    servers: Vec<ServerKey>
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -631,6 +633,27 @@ struct AccessKey {
     method: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     access_url: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct ServerKey {
+    password: String,
+    port: u16,
+}
+
+impl ServerKey {
+    fn new(password: String, port: u16) -> ServerKey {
+        ServerKey {
+            password,
+            port,
+        }
+    }
+    fn from(config: &ServerConfig) -> ServerKey {
+        ServerKey {
+            password: config.key.clone(),
+            port: config.port,
+        }
+    }
 }
 
 #[cfg(feature = "database")]
@@ -723,6 +746,11 @@ async fn list_access_keys(State(state): State<AppState>) -> impl IntoResponse {
         .map_err(|e| ApiError::DatabaseError(e.to_string()))
         .expect("Failed to list users");
 
+    let servers = db.list_servers(true)
+        .expect("Failed to list servers")
+        .iter().map (|server_config| ServerKey::from(server_config)).collect::<Vec<_>>();
+
+
     let access_keys = users
         .into_iter()
         .map(|(user, (method, url))| AccessKey {
@@ -735,7 +763,7 @@ async fn list_access_keys(State(state): State<AppState>) -> impl IntoResponse {
         })
         .collect();
 
-    (StatusCode::OK, Json(AccessKeyListResponse { access_keys }))
+    (StatusCode::OK, Json(AccessKeyListResponse { access_keys, servers }))
 }
 #[cfg(not(feature = "database"))]
 async fn list_access_keys(State(_): State<AppState>) -> impl IntoResponse {
