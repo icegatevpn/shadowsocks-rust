@@ -299,14 +299,18 @@ pub async fn run_web_service(
             .map_err(|e| ApiError::DatabaseError(e.to_string()))
             .expect("Failed to list users");
 
-        let (user, (method, url, _)) = user_and_url.first().unwrap();
-
+        let (user, (method, url, srv_key)) = user_and_url.first().unwrap();
+        let passkey = if method.contains("2022") {
+            Some(format!("{}:{}", srv_key, user.key).to_string())
+        } else {
+            Some(user.key.clone())
+        };
         (
             StatusCode::OK,
             Json(AccessKey {
                 id: Some(user.id.unwrap_or(0).to_string()),
                 name: Some(user.name.clone()),
-                password: Some(user.key.clone()),
+                password: passkey,
                 port: Some(user.server_port),
                 method: Some(method.clone()),
                 access_url: url.clone(),
@@ -692,12 +696,18 @@ async fn create_access_key(
         );
     }
 
+    let passkey = if server.method.contains("2022") {
+        Some(format!("{}:{}", server.key, user.key).to_string())
+    } else {
+        Some(user.key.clone())
+    };
+
     (
         StatusCode::OK,
         Json(AccessKey {
             id: Some(user.id.unwrap_or(0).to_string()),
             name: Some(user.name),
-            password: Some(user.key),
+            password: passkey,
             port: Some(user.server_port),
             method: Some(DEFAULT_CIPHER_METHOD.to_string()),
             access_url: url,
