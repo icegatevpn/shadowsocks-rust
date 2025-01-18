@@ -24,7 +24,6 @@ use tokio::{
     time::{timeout, Duration},
 };
 use uuid::Uuid;
-use shadowsocks_service::mysql_db::ServerConfig;
 
 #[derive(Debug, Deserialize)]
 struct ManagerCommand {
@@ -272,11 +271,7 @@ pub async fn run_web_service(
     #[cfg(feature = "database")]
     db: Arc<Mutex<Database>>,
 ) {
-    let url_key = if cfg!(debug_assertions) {
-        "debug".to_string()
-    } else {
-        random_url_key.clone()
-    };
+    let url_key = random_url_key;
 
     // Create channel for commands
     let (command_tx, command_rx) = unbounded();
@@ -304,7 +299,7 @@ pub async fn run_web_service(
             .map_err(|e| ApiError::DatabaseError(e.to_string()))
             .expect("Failed to list users");
 
-        let (user, (method, url)) = user_and_url.first().unwrap();
+        let (user, (method, url, _)) = user_and_url.first().unwrap();
 
         (
             StatusCode::OK,
@@ -621,7 +616,6 @@ impl IntoApiError for &str {
 #[derive(Debug, Serialize)]
 struct AccessKeyListResponse {
     access_keys: Vec<AccessKey>,
-    servers: Vec<ServerKey>
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -633,27 +627,6 @@ struct AccessKey {
     method: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     access_url: Option<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct ServerKey {
-    password: String,
-    port: u16,
-}
-
-impl ServerKey {
-    fn new(password: String, port: u16) -> ServerKey {
-        ServerKey {
-            password,
-            port,
-        }
-    }
-    fn from(config: &ServerConfig) -> ServerKey {
-        ServerKey {
-            password: config.key.clone(),
-            port: config.port,
-        }
-    }
 }
 
 #[cfg(feature = "database")]
@@ -719,7 +692,6 @@ async fn create_access_key(
         );
     }
 
-    // Return successful response
     (
         StatusCode::OK,
         Json(AccessKey {
@@ -746,24 +718,26 @@ async fn list_access_keys(State(state): State<AppState>) -> impl IntoResponse {
         .map_err(|e| ApiError::DatabaseError(e.to_string()))
         .expect("Failed to list users");
 
-    let servers = db.list_servers(true)
-        .expect("Failed to list servers")
-        .iter().map (|server_config| ServerKey::from(server_config)).collect::<Vec<_>>();
-
-
     let access_keys = users
         .into_iter()
-        .map(|(user, (method, url))| AccessKey {
-            id: Some(user.id.unwrap_or(0).to_string()),
-            name: Some(user.name),
-            password: Some(user.key),
-            port: Some(user.server_port),
-            method: Some(method),
-            access_url: url,
+        .map(|(user, (method, url, srv_key))| {
+            let passkey = if method.contains("2022") {
+                Some(format!("{}:{}", srv_key, user.key).to_string())
+            } else {
+                Some(user.key)
+            };
+            AccessKey {
+                id: Some(user.id.unwrap_or(0).to_string()),
+                name: Some(user.name),
+                password: passkey,
+                port: Some(user.server_port),
+                method: Some(method),
+                access_url: url,
+            }
         })
         .collect();
 
-    (StatusCode::OK, Json(AccessKeyListResponse { access_keys, servers }))
+    (StatusCode::OK, Json(AccessKeyListResponse { access_keys }))
 }
 #[cfg(not(feature = "database"))]
 async fn list_access_keys(State(_): State<AppState>) -> impl IntoResponse {

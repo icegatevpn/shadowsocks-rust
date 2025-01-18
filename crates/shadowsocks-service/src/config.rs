@@ -85,8 +85,6 @@ use crate::acl::AccessControl;
 use crate::local::dns::NameServerAddr;
 #[cfg(feature = "local")]
 use crate::local::socks::config::Socks5AuthConfig;
-#[cfg(feature = "database")]
-use crate::mysql_db::KeyError;
 
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(untagged)]
@@ -1306,6 +1304,8 @@ pub struct Config {
     /// Local server configuration
     pub local: Vec<LocalInstanceConfig>,
 
+    pub url_key: Option<String>,
+
     // Port that the tcp manager listens on
     pub manager_tcp_port: Option<u16>,
 
@@ -1481,7 +1481,7 @@ impl Config {
             server: Vec::new(),
             local: Vec::new(),
             manager_tcp_port: None,
-
+            url_key: None,
             dns: DnsConfig::default(),
             dns_cache_size: None,
             ipv6_first: false,

@@ -1,6 +1,6 @@
 use crate::config::{Config, ServerInstanceConfig};
 use chrono::{NaiveDateTime, Utc};
-use log::{debug, error};
+use log::{debug, error, warn};
 use rusqlite::{
     params,
     Connection, Error as RusqliteError, Error, OptionalExtension, Row,
@@ -17,10 +17,6 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::Path;
 use std::time::{Duration};
-use base64::Engine;
-use base64::engine::general_purpose::URL_SAFE;
-use rand::RngCore;
-use rand::rngs::OsRng;
 use tokio::sync::broadcast;
 
 #[derive(Debug, Clone)]
@@ -359,6 +355,7 @@ impl Database {
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL UNIQUE,
                 config TEXT NOT NULL,
+                url_key TEXT,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
             )",
@@ -424,9 +421,52 @@ impl Database {
         Ok(())
     }
 
+    pub fn save_url_key(&self, url_key: &str) -> Result<(), RusqliteError> {
+        // Try to update first
+        let mut stmt = self.conn.prepare(
+            "UPDATE config SET url_key = ?1, updated_at = CURRENT_TIMESTAMP
+             WHERE name = 'manager_config'"
+        )?;
+
+        let rows = stmt.execute(params![url_key])?;
+
+        if rows == 0 {
+            // If no rows were updated, insert new record
+            let mut stmt = self.conn.prepare(
+                "INSERT INTO config (name, config, url_key)
+                 VALUES ('manager_config', '{}', ?1)"
+            )?;
+            stmt.execute(params![url_key])?;
+        }
+
+        Ok(())
+    }
+
+    pub fn get_url_key(&self) -> Result<Option<String>, RusqliteError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT url_key FROM config WHERE name = 'manager_config'"
+        )?;
+
+        let url_key = stmt.query_row(params![], |row| row.get(0))
+            .optional()?;
+
+        Ok(url_key)
+    }
+
     pub fn save_config_to_tables(&mut self, config: &Config) -> Result<(), RusqliteError> {
         // Start a transaction to ensure all operations succeed or fail together
         let tx = self.conn.transaction()?;
+        warn!("<<<<<<<<<< save key:: {:?}", config.url_key);
+        // Add config
+        tx.execute(
+            "INSERT OR REPLACE INTO config (name, config, url_key)
+                 VALUES (?1, ?2, ?3)",
+            params![
+                    "manager_config",
+                    config.to_string(),
+                    &config.url_key.clone().unwrap_or("".to_string()),
+                ],
+        )?;
 
         // First save any servers from the config
         for server_instance in &config.server {
@@ -776,7 +816,7 @@ impl Database {
         &self,
         active_only: bool,
         user_id: Option<i64>,
-    ) -> Result<Vec<(UserConfig, (String, Option<String>))>, RusqliteError> {
+    ) -> Result<Vec<(UserConfig, (String, Option<String>, String))>, RusqliteError> {
         let where_clause = match user_id {
             Some(id) => {
                 format!(
@@ -799,7 +839,7 @@ impl Database {
         let query = format!(
             "SELECT users.id, users.name, users.key, users.server_port,
                 users.active, users.remarks, users.created_at, users.updated_at,
-                servers.method, servers.ip_address
+                servers.method, servers.ip_address, servers.key
              FROM users
              INNER JOIN servers ON servers.port = users.server_port
              {}
@@ -808,9 +848,10 @@ impl Database {
         );
 
         let mut stmt = self.conn.prepare(&query)?;
-
+        let mut server_key: String = "".to_string();
         let users = stmt
             .query_map([], |row| {
+                server_key = row.get(10)?;
                 let url = match generate_ssurl(
                     &row.get::<usize, String>(9)?,
                     row.get(3)?,
@@ -821,7 +862,7 @@ impl Database {
                     Ok(url) => Some(url),
                     Err(_) => Some("Error generating URL".to_string()),
                 };
-                Ok((self.build_user_from_row(row)?, (row.get::<usize, String>(8)?, url)))
+                Ok((self.build_user_from_row(row)?, (row.get::<usize, String>(8)?, url, server_key.clone())))
             })?
             .collect::<Result<Vec<_>, _>>()?;
 
@@ -1131,6 +1172,7 @@ impl Database {
 
 #[cfg(test)]
 mod tests {
+    use base64::Engine;
     use super::*;
 
     #[test]

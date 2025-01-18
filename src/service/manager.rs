@@ -4,7 +4,7 @@ use std::{future::Future, net::IpAddr, path::PathBuf, process::ExitCode, time::D
 use std::sync::Arc;
 use clap::{builder::PossibleValuesParser, Arg, ArgAction, ArgGroup, ArgMatches, Command, ValueHint};
 use futures::future::{self, Either};
-use log::{info, trace, warn};
+use log::{debug, info, trace, warn};
 use tokio::{
     self,
     runtime::{Builder, Runtime},
@@ -17,16 +17,11 @@ use shadowsocks_service::mysql_db::Database as Database;
 #[cfg(not(feature = "database"))]
 use shadowsocks_service::manager::server::Database as Database;
 
-use shadowsocks_service::{
-    acl::AccessControl,
-    config::{Config, ConfigType, ManagerConfig, ManagerServerHost,},
-    run_manager,
-    shadowsocks::{
-        config::{ManagerAddr, Mode},
-        crypto::{available_ciphers, CipherKind},
-        plugin::PluginConfig,
-    },
-};
+use shadowsocks_service::{acl::AccessControl, config::{Config, ConfigType, ManagerConfig, ManagerServerHost, }, run_manager, shadowsocks::{
+    config::{ManagerAddr, Mode},
+    crypto::{available_ciphers, CipherKind},
+    plugin::PluginConfig,
+}};
 
 #[cfg(feature = "logging")]
 use crate::logging;
@@ -50,6 +45,14 @@ pub fn define_command_line_options(mut app: Command) -> Command {
                 .value_parser(clap::value_parser!(PathBuf))
                 .value_hint(ValueHint::FilePath)
                 .help("Shadowsocks configuration file (https://shadowsocks.org/doc/configs.html), the only required fields are \"manager_address\" and \"manager_port\". Servers defined will be created when process is started."),
+        )
+        .arg(
+            Arg::new("URL_KEY")
+                .long("url_key")
+                .num_args(1)
+                .action(ArgAction::Set)
+                .value_parser(clap::value_parser!(PathBuf))
+                .help("Specify Url Key for manager webserice"),
         )
         .arg(
             Arg::new("MANAGER_TCP_PORT")
@@ -299,8 +302,25 @@ fn create_default_database() -> Database {
     Database::new(DEFAULT_DATABASE).expect("Failed to create default database")
 }
 
+pub fn set_url_key(config: &mut Config, url_key: Option<String>, database: &Database) {
+    config.url_key = match url_key {
+        Some(k) => Some(String::from(k)),
+        None => {
+            database.get_url_key()
+                .unwrap_or(Some(Config::generate_manager_key().expect("Failed to generate URL key!")))
+        }
+    };
+}
 /// Create `Runtime` and `main` entry
-pub fn create(matches: &ArgMatches) -> Result<(Runtime, impl Future<Output = ExitCode>), ExitCode> {
+fn create(matches: &ArgMatches) -> Result<(Runtime, impl Future<Output = ExitCode>), ExitCode> {
+    let key_binding = matches.get_one::<PathBuf>("URL_KEY").cloned()
+        .or_else(|| {None});//.unwrap();
+    let url_key = match key_binding {
+        Some(k) => Some(k.to_str().unwrap().to_string()),
+        _ => None,
+    };
+    debug!("key: {:?}", url_key);
+
     let (config, runtime, database) = {
         let config_path_opt = matches.get_one::<PathBuf>("CONFIG").cloned().or_else(|| {
             if !matches.contains_id("SERVER_CONFIG") {
@@ -340,7 +360,6 @@ pub fn create(matches: &ArgMatches) -> Result<(Runtime, impl Future<Output = Exi
 
         trace!("{:?}", service_config);
 
-
         #[cfg(feature = "database")]
         let mut database =  matches.get_one::<PathBuf>("DATABASE").cloned()
         .map(|path| Database::new(&path))
@@ -356,12 +375,11 @@ pub fn create(matches: &ArgMatches) -> Result<(Runtime, impl Future<Output = Exi
             database = Some(create_default_database())
         }
 
-
         // Load config and handle database updates
         let mut config = match config_path_opt {
             Some(cpath) => {
                 // Load config from file first
-                let cfg = match Config::load_from_file(&cpath, ConfigType::Manager) {
+                let mut cfg = match Config::load_from_file(&cpath, ConfigType::Manager) {
                     Ok(cfg) => cfg,
                     Err(err) => {
                         eprintln!("Error loading config {cpath:?}, {err}");
@@ -372,6 +390,7 @@ pub fn create(matches: &ArgMatches) -> Result<(Runtime, impl Future<Output = Exi
                 // If we have both a config file and database, update the database with the Config
                 #[cfg(feature = "database")]
                 if let Some(ref mut db) = database {
+                    set_url_key(&mut cfg, url_key, db);
                     if let Err(err) = db.save_config_to_tables(&cfg) {
                         eprintln!("Error saving config to database: {err}");
                     } else {
@@ -382,7 +401,6 @@ pub fn create(matches: &ArgMatches) -> Result<(Runtime, impl Future<Output = Exi
                 cfg
             },
             None => {
-
                 match &database {
                     None => Config::new(ConfigType::Manager),
                     #[cfg(not(feature = "database"))]
@@ -394,6 +412,7 @@ pub fn create(matches: &ArgMatches) -> Result<(Runtime, impl Future<Output = Exi
                     Some(db) => {
                         // Create base config with manager
                         let mut config = Config::new(ConfigType::Manager);
+                        set_url_key(&mut config, url_key, db);
                         #[cfg(unix)]
                         if cfg!(unix) {
                             config.manager = Some(ManagerConfig::new(ManagerAddr::UnixSocketAddr(SOCKET_PATH.into())));
@@ -638,8 +657,14 @@ pub fn create(matches: &ArgMatches) -> Result<(Runtime, impl Future<Output = Exi
         let mut db = Arc::new(Mutex::new(db));
         // Clone the Arc for the web service
         let web_db = db.clone();
+
+        // config.url_key should already be set, I think this is superfluous.
+        let url_key = match &config.url_key {
+            Some(key) => key.to_string(),
+            _ => Config::generate_manager_key().expect("Failed to generate URL key!")
+        };
+
         let server = run_manager(config, Some(&mut db));
-        let url_key = Config::generate_manager_key().expect("Failed to generate URL key!");
 
         tokio::spawn(run_web_service(SOCKET_PATH.to_string(), host, url_key, web_db));
 
