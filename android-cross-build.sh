@@ -1,7 +1,14 @@
 #!/opt/homebrew/bin/bash
 
-# export ANDROID_NDK_HOME=~/Library/Android/sdk/ndk/27.0.12077973
+/*
+  Requires the Android NDK installed:
+  https://developer.android.com/ndk/downloads
+  Onse installed, use below command to set ANDROID_NDK_HOME
+  export ANDROID_NDK_HOME=~/Library/Android/sdk/ndk/27.0.12077973
 
+  This uses Cargo NDK to build Android images: https://docs.rs/crate/cargo-ndk/0.6.1
+  Install: cargo install cargo-ndk
+*/
 # Configuration
 RUST_PROJECT_PATH="."
 OUTPUT_DIR="target/android-libs"
@@ -47,16 +54,17 @@ build_all() {
               --no-default-features \
               --features "$FEATURES" \
               --release
-            
-       # Determine the correct source path
-        local lib_path
-        if [ "$profile" = "release" ]; then
-            lib_path="target/$target/release/libshadowsocks_vpn.so"
-        else
-            lib_path="target/$target/debug/libshadowsocks_vpn.so"
-        fi
         
-       # Copy and rename the binary as a shared library
+       # Copy the build libs to convenient locations. This will need to be modified for your build environment.
+       # Or just skip it entirely.
+       # Determine the correct source path
+               local lib_path
+               if [ "$profile" = "release" ]; then
+                   lib_path="target/$target/release/libshadowsocks_vpn.so"
+               else
+                   lib_path="target/$target/debug/libshadowsocks_vpn.so"
+               fi
+
         if [ -f "$lib_path" ]; then
             cp "$lib_path" "$OUTPUT_DIR/$abi/libshadowsocks_vpn.so"
             echo "Copied from $lib_path to $OUTPUT_DIR/$abi/libshadowsocks_vpn.so"

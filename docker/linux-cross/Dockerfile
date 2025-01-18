@@ -36,18 +36,20 @@ RUN mkdir -p /android-ndk/sysroot/usr/lib/aarch64-linux-android
 
 # Download and build SQLite for Android cross-compilation
 WORKDIR /tmp
-RUN update-ca-certificates && \
-    curl -L 'https://www.sqlite.org/2024/sqlite-amalgamation-3450100.zip' -o sqlite.zip && \
-    unzip sqlite.zip && \
-    cd sqlite-amalgamation-3450100 && \
-    x86_64-w64-mingw32-gcc -c sqlite3.c -o sqlite3.o && \
-    x86_64-w64-mingw32-ar rcs libsqlite3.a sqlite3.o && \
-    cp libsqlite3.a /usr/x86_64-w64-mingw32/lib/ && \
-    i686-w64-mingw32-gcc -c sqlite3.c -o sqlite3_32.o && \
-    i686-w64-mingw32-ar rcs libsqlite3_32.a sqlite3_32.o && \
-    cp libsqlite3_32.a /usr/i686-w64-mingw32/lib/libsqlite3.a && \
-    cd .. && \
-    rm -rf sqlite-amalgamation-3450100 sqlite.zip
+RUN update-ca-certificates
+#WORKDIR /tmp
+#RUN update-ca-certificates && \
+#    curl -L 'https://www.sqlite.org/2024/sqlite-amalgamation-3450100.zip' -o sqlite.zip && \
+#    unzip sqlite.zip && \
+#    cd sqlite-amalgamation-3450100 && \
+#    x86_64-w64-mingw32-gcc -c sqlite3.c -o sqlite3.o && \
+#    x86_64-w64-mingw32-ar rcs libsqlite3.a sqlite3.o && \
+#    cp libsqlite3.a /usr/x86_64-w64-mingw32/lib/ && \
+#    i686-w64-mingw32-gcc -c sqlite3.c -o sqlite3_32.o && \
+#    i686-w64-mingw32-ar rcs libsqlite3_32.a sqlite3_32.o && \
+#    cp libsqlite3_32.a /usr/i686-w64-mingw32/lib/libsqlite3.a && \
+#    cd .. && \
+#    rm -rf sqlite-amalgamation-3450100 sqlite.zip
 #RUN update-ca-certificates && \
 #    curl -L 'https://www.sqlite.org/2024/sqlite-amalgamation-3450100.zip' -o sqlite.zip && \
 #    unzip sqlite.zip
