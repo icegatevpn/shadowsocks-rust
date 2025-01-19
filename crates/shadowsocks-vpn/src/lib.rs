@@ -1,4 +1,5 @@
 use std::cell::RefCell;
+pub mod windows_tun_device; 
 
 #[cfg(any(target_os = "android", target_os = "ios"))]
 mod mobile_singleton;
