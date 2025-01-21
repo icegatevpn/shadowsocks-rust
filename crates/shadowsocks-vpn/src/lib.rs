@@ -20,7 +20,7 @@ mod macos_tun_device;
 #[cfg(target_os = "android")]
 mod mobile_tun_device;
 #[cfg(target_os = "windows")]
-mod windows_tun_device;
+pub mod windows_tun_device;
 
 #[cfg(target_os = "android")]
 use crate::mobile_singleton::MobileDeviceManager;
