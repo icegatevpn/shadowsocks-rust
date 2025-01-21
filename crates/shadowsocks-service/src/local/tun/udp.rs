@@ -50,7 +50,6 @@ impl UdpTun {
         dst_addr: SocketAddr,
         payload: &[u8],
     ) -> io::Result<()> {
-        debug!("UDP {} -> {} payload.size: {} bytes", src_addr, dst_addr, payload.len());
         if let Err(err) = self.manager.send_to(src_addr, dst_addr.into(), payload).await {
             debug!(
                 "UDP {} -> {} payload.size: {} bytes failed, error: {}",

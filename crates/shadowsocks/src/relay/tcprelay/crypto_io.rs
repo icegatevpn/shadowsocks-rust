@@ -7,7 +7,7 @@ use std::{
     sync::Arc,
     task::{self, Poll},
 };
-
+use arc_swap::ArcSwapAny;
 #[cfg(any(feature = "stream-cipher", feature = "aead-cipher", feature = "aead-cipher-2022"))]
 use byte_string::ByteStr;
 use bytes::Bytes;
@@ -15,7 +15,6 @@ use futures::ready;
 #[cfg(any(feature = "stream-cipher", feature = "aead-cipher", feature = "aead-cipher-2022"))]
 use log::trace;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
-
 use crate::{
     config::ServerUserManager,
     context::Context,
@@ -80,7 +79,8 @@ pub enum DecryptedReader {
     #[cfg(feature = "stream-cipher")]
     Stream(StreamDecryptedReader),
     #[cfg(feature = "aead-cipher-2022")]
-    Aead2022(Aead2022DecryptedReader),
+    Aead2022(Aead2022DecryptedReader, Option<Arc<ServerUserManager>>),
+    // Aead2022(Aead2022DecryptedReader)
 }
 
 impl DecryptedReader {
@@ -90,7 +90,7 @@ impl DecryptedReader {
     }
 
     /// Create a new reader for reading encrypted data
-    pub fn with_user_manager(
+    pub fn with_user_manager( // called for each packet!!
         stream_ty: StreamType,
         method: CipherKind,
         key: &[u8],
@@ -112,12 +112,13 @@ impl DecryptedReader {
                 DecryptedReader::None
             }
             #[cfg(feature = "aead-cipher-2022")]
-            CipherCategory::Aead2022 => DecryptedReader::Aead2022(Aead2022DecryptedReader::with_user_manager(
-                stream_ty,
-                method,
-                key,
-                user_manager,
-            )),
+            CipherCategory::Aead2022 => {
+                DecryptedReader::Aead2022(Aead2022DecryptedReader::with_user_manager(
+                    stream_ty,
+                    method,
+                    key,
+                ), user_manager)
+            },
         }
     }
 
@@ -147,8 +148,8 @@ impl DecryptedReader {
                 Pin::new(stream).poll_read(cx, buf).map_err(Into::into)
             }
             #[cfg(feature = "aead-cipher-2022")]
-            DecryptedReader::Aead2022(ref mut reader) => {
-                reader.poll_read_decrypted(cx, context, stream, buf).map_err(Into::into)
+            DecryptedReader::Aead2022(ref mut reader, ref manager) => {
+                reader.poll_read_decrypted(cx, context, stream, buf, manager).map_err(Into::into)
             }
         }
     }
@@ -162,7 +163,7 @@ impl DecryptedReader {
             DecryptedReader::Aead(ref reader) => reader.salt(),
             DecryptedReader::None => None,
             #[cfg(feature = "aead-cipher-2022")]
-            DecryptedReader::Aead2022(ref reader) => reader.salt(),
+            DecryptedReader::Aead2022(ref reader, _) => reader.salt(),
         }
     }
 
@@ -175,7 +176,7 @@ impl DecryptedReader {
             DecryptedReader::Aead(..) => None,
             DecryptedReader::None => None,
             #[cfg(feature = "aead-cipher-2022")]
-            DecryptedReader::Aead2022(ref reader) => reader.request_salt(),
+            DecryptedReader::Aead2022(ref reader, _) => reader.request_salt(),
         }
     }
 
@@ -188,7 +189,7 @@ impl DecryptedReader {
             DecryptedReader::Aead(..) => None,
             DecryptedReader::None => None,
             #[cfg(feature = "aead-cipher-2022")]
-            DecryptedReader::Aead2022(ref reader) => reader.user_key(),
+            DecryptedReader::Aead2022(ref reader, _) => reader.user_key(),
         }
     }
 
@@ -200,12 +201,12 @@ impl DecryptedReader {
             DecryptedReader::Aead(ref reader) => reader.handshaked(),
             DecryptedReader::None => true,
             #[cfg(feature = "aead-cipher-2022")]
-            DecryptedReader::Aead2022(ref reader) => reader.handshaked(),
+            DecryptedReader::Aead2022(ref reader, _) => reader.handshaked(),
         }
     }
 }
 
-/// Writer for writing encrypted data stream into shadowsocks' tunnel
+/// Writer for writing encrypted data stream into shadowsocks tunnel
 pub enum EncryptedWriter {
     None,
     #[cfg(feature = "aead-cipher")]
@@ -364,7 +365,7 @@ impl<S> CryptoStream<S> {
         key: &[u8],
     ) -> CryptoStream<S> {
         const EMPTY_IDENTITY: [Bytes; 0] = [];
-        CryptoStream::from_stream_with_identity(context, stream, stream_ty, method, key, &EMPTY_IDENTITY, None)
+        CryptoStream::from_stream_with_identity(context, stream, stream_ty, method, key, &EMPTY_IDENTITY, &None)
     }
 
     /// Create a new CryptoStream with the underlying stream connection
@@ -375,7 +376,7 @@ impl<S> CryptoStream<S> {
         method: CipherKind,
         key: &[u8],
         identity_keys: &[Bytes],
-        user_manager: Option<Arc<ServerUserManager>>,
+        user_manager: &Option<Arc<ArcSwapAny<Arc<ServerUserManager>>>>
     ) -> CryptoStream<S> {
         let category = method.category();
 
@@ -425,9 +426,14 @@ impl<S> CryptoStream<S> {
             }
         };
 
+        let mut um_clone: Option<Arc<ServerUserManager>> = None;
+        if let Some(user_manager) = user_manager {
+            um_clone = Some(Arc::from((&*user_manager.load()).to_owned()));
+        }
+
         CryptoStream {
             stream,
-            dec: DecryptedReader::with_user_manager(stream_ty, method, key, user_manager),
+            dec: DecryptedReader::with_user_manager(stream_ty, method, key, um_clone),
             enc: EncryptedWriter::with_identity(stream_ty, method, key, &iv, identity_keys),
             method,
             has_handshaked: false,
@@ -499,7 +505,7 @@ impl<S> CryptoStream<S> {
     /// Returning (DataChunkCount, RemainingBytes)
     #[cfg(feature = "aead-cipher-2022")]
     pub(crate) fn current_data_chunk_remaining(&self) -> (u64, usize) {
-        if let DecryptedReader::Aead2022(ref dec) = self.dec {
+        if let DecryptedReader::Aead2022(ref dec, _) = self.dec {
             dec.current_data_chunk_remaining()
         } else {
             panic!("only AEAD-2022 protocol has data chunk counter");

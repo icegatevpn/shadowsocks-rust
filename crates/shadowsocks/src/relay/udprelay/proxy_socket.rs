@@ -14,7 +14,7 @@ use std::{
 
 use byte_string::ByteStr;
 use bytes::{Bytes, BytesMut};
-use log::{info, trace, warn};
+use log::{error, info, trace, warn};
 use once_cell::sync::Lazy;
 use tokio::{io::ReadBuf, time};
 
@@ -84,6 +84,7 @@ pub struct ProxySocket<S> {
     context: SharedContext,
     identity_keys: Arc<Vec<Bytes>>,
     user_manager: Option<Arc<ServerUserManager>>,
+    strict: bool
 }
 
 impl ProxySocket<ShadowUdpSocket> {
@@ -119,6 +120,7 @@ impl ProxySocket<ShadowUdpSocket> {
             context,
             svr_cfg,
             socket,
+            opts.strict
         ))
     }
 
@@ -139,6 +141,7 @@ impl ProxySocket<ShadowUdpSocket> {
         opts: AcceptOpts,
     ) -> ProxySocketResult<ProxySocket<ShadowUdpSocket>> {
         // Plugins doesn't support UDP
+        let strict = opts.strict;
         let socket = match svr_cfg.udp_external_addr() {
             ServerAddr::SocketAddr(sa) => ShadowUdpSocket::listen_with_opts(sa, opts).await?,
             ServerAddr::DomainName(domain, port) => {
@@ -153,6 +156,7 @@ impl ProxySocket<ShadowUdpSocket> {
             context,
             svr_cfg,
             socket,
+            strict
         ))
     }
 }
@@ -164,6 +168,7 @@ impl<S> ProxySocket<S> {
         context: SharedContext,
         svr_cfg: &ServerConfig,
         socket: S,
+        strict: bool
     ) -> ProxySocket<S> {
         let key = svr_cfg.key().to_vec().into_boxed_slice();
         let method = svr_cfg.method();
@@ -185,6 +190,7 @@ impl<S> ProxySocket<S> {
                 UdpSocketType::Client => None,
                 UdpSocketType::Server => svr_cfg.clone_user_manager(),
             },
+            strict
         }
     }
 
@@ -444,11 +450,12 @@ where
         &self,
         recv_buf: &mut [u8],
         user_manager: Option<&ServerUserManager>,
+        strict: &bool,
     ) -> ProtocolResult<(usize, Address, Option<UdpSocketControlData>)> {
         match self.socket_type {
             UdpSocketType::Client => decrypt_server_payload(&self.context, self.method, &self.key, recv_buf),
             UdpSocketType::Server => {
-                decrypt_client_payload(&self.context, self.method, &self.key, recv_buf, user_manager)
+                decrypt_client_payload(&self.context, self.method, &self.key, recv_buf, user_manager, strict)
             }
         }
     }
@@ -480,7 +487,7 @@ where
             },
         };
 
-        let (n, addr, control) = match self.decrypt_recv_buffer(&mut recv_buf[..recv_n], self.user_manager.as_deref()) {
+        let (n, addr, control) = match self.decrypt_recv_buffer(&mut recv_buf[..recv_n], self.user_manager.as_deref(), &self.strict) {
             Ok(x) => x,
             Err(err) => return Err(ProxySocketError::ProtocolError(err)),
         };
@@ -502,8 +509,11 @@ where
     ///
     /// It is recommended to allocate a buffer to have at least 65536 bytes.
     #[allow(clippy::type_complexity)]
-    pub async fn recv_from(&self, recv_buf: &mut [u8]) -> ProxySocketResult<(usize, SocketAddr, Address, usize)> {
-        self.recv_from_with_ctrl(recv_buf)
+    pub async fn recv_from(
+        &self, recv_buf: &mut [u8],
+        user_manager: Option<&ServerUserManager>,
+    ) -> ProxySocketResult<(usize, SocketAddr, Address, usize)> {
+        self.recv_from_with_ctrl(recv_buf, user_manager)
             .await
             .map(|(n, sa, a, rn, _)| (n, sa, a, rn))
     }
@@ -517,6 +527,7 @@ where
     pub async fn recv_from_with_ctrl(
         &self,
         recv_buf: &mut [u8],
+        user_manager: Option<&ServerUserManager>,
     ) -> ProxySocketResult<(usize, SocketAddr, Address, usize, Option<UdpSocketControlData>)> {
         // Waiting for response from server SERVER -> CLIENT
         let (recv_n, target_addr) = match self.recv_timeout {
@@ -528,7 +539,7 @@ where
             },
         };
 
-        let (n, addr, control) = match self.decrypt_recv_buffer(&mut recv_buf[..recv_n], self.user_manager.as_deref()) {
+        let (n, addr, control) = match self.decrypt_recv_buffer(&mut recv_buf[..recv_n], user_manager, &self.strict) {
             Ok(x) => x,
             Err(err) => return Err(ProxySocketError::ProtocolErrorWithPeer(target_addr, err)),
         };
@@ -567,8 +578,7 @@ where
         ready!(self.io.poll_recv(cx, recv_buf))?;
 
         let n_recv = recv_buf.filled().len();
-
-        match self.decrypt_recv_buffer(recv_buf.filled_mut(), self.user_manager.as_deref()) {
+        match self.decrypt_recv_buffer(recv_buf.filled_mut(), self.user_manager.as_deref(), &self.strict) {
             Ok(x) => Poll::Ready(Ok((x.0, x.1, n_recv, x.2))),
             Err(err) => Poll::Ready(Err(ProxySocketError::ProtocolError(err))),
         }
@@ -595,7 +605,7 @@ where
         let src = ready!(self.io.poll_recv_from(cx, recv_buf))?;
 
         let n_recv = recv_buf.filled().len();
-        match self.decrypt_recv_buffer(recv_buf.filled_mut(), self.user_manager.as_deref()) {
+        match self.decrypt_recv_buffer(recv_buf.filled_mut(), self.user_manager.as_deref(), &self.strict) {
             Ok(x) => Poll::Ready(Ok((x.0, src, x.1, n_recv, x.2))),
             Err(err) => Poll::Ready(Err(ProxySocketError::ProtocolError(err))),
         }

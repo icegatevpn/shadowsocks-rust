@@ -1,7 +1,6 @@
 //! Shadowsocks Local Server Context
 
 use std::{net::SocketAddr, sync::Arc};
-
 use shadowsocks::{
     config::ServerType,
     context::{Context, SharedContext},
@@ -9,7 +8,6 @@ use shadowsocks::{
     net::ConnectOpts,
     relay::Address,
 };
-
 use crate::{acl::AccessControl, config::SecurityConfig, net::FlowStat};
 
 /// Server Service Context
@@ -120,4 +118,5 @@ impl ServiceContext {
         let context = Arc::get_mut(&mut self.context).expect("cannot set security on a shared context");
         context.set_replay_attack_policy(security.replay_attack.policy);
     }
+
 }

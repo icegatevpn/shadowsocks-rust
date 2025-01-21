@@ -79,18 +79,19 @@ impl Socks5UdpClient {
     /// If a message is too long to fit in the supplied buffer, excess bytes may be discarded.
     pub async fn recv_from(&self, recv_buf: &mut [u8]) -> Result<(usize, u8, Address), Error> {
         self.check_associated()?;
-
-        let n = self.socket.recv(recv_buf).await?;
+        print!("socks5-udp recv from {} bytes", recv_buf.len());
+        // let n = self.socket.recv(recv_buf).await?;
+        let n = self.socket.recv_from(recv_buf).await?;
 
         // Address + Payload
-        let mut cur = Cursor::new(&recv_buf[..n]);
+        let mut cur = Cursor::new(&recv_buf[..n.0]);
 
         let header = UdpAssociateHeader::read_from(&mut cur).await?;
         let pos = cur.position() as usize;
 
         recv_buf.copy_within(pos.., 0);
 
-        Ok((n - pos, header.frag, header.address))
+        Ok((n.0 - pos, header.frag, header.address))
     }
 
     fn check_associated(&self) -> io::Result<()> {

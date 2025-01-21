@@ -1,13 +1,15 @@
 //! A TCP listener for accepting shadowsocks' client connection
 
 use std::{io, net::SocketAddr, sync::Arc};
-
+use arc_swap::{ArcSwap, ArcSwapAny};
+use log::{debug};
 use once_cell::sync::Lazy;
 use tokio::{
     io::{AsyncRead, AsyncWrite},
     net::TcpStream,
 };
-
+use tokio::sync::mpsc::UnboundedReceiver;
+use tokio::task::JoinHandle;
 use crate::{
     config::{ServerAddr, ServerConfig, ServerUserManager},
     context::SharedContext,
@@ -23,15 +25,33 @@ pub struct ProxyListener {
     method: CipherKind,
     key: Box<[u8]>,
     context: SharedContext,
-    user_manager: Option<Arc<ServerUserManager>>,
+    // user_manager_thing: Arc<RwLock<ServerUserManager>>, // todo make this an ArcSwap!!!
+    user_manager_fancy: Arc<ArcSwapAny<Arc<ServerUserManager>>>,
 }
 
 static DEFAULT_ACCEPT_OPTS: Lazy<AcceptOpts> = Lazy::new(Default::default);
 
 impl ProxyListener {
+
+
     /// Create a `ProxyListener` binding to a specific address
     pub async fn bind(context: SharedContext, svr_cfg: &ServerConfig) -> io::Result<ProxyListener> {
         ProxyListener::bind_with_opts(context, svr_cfg, DEFAULT_ACCEPT_OPTS.clone()).await
+    }
+
+    pub fn listen_for_users(&self, mut user_manager_rcv: UnboundedReceiver<ServerUserManager>)
+                            -> JoinHandle<()> {
+        let um_in = Arc::clone(&self.user_manager_fancy);
+        tokio::spawn(async move {
+            debug!("Receiving Config....");
+            loop {
+                let um = user_manager_rcv.recv().await;
+                if let Some(um) = um {
+                    debug!("TCP Received config from remote ...");
+                    um_in.store(Arc::new(um));
+                }
+            }
+        })
     }
 
     /// Create a `ProxyListener` binding to a specific address with opts
@@ -59,7 +79,8 @@ impl ProxyListener {
             method: svr_cfg.method(),
             key: svr_cfg.key().to_vec().into_boxed_slice(),
             context,
-            user_manager: svr_cfg.clone_user_manager(),
+            // user_manager_thing: Arc::new(RwLock::from(ServerUserManager::default()))
+            user_manager_fancy: Arc::new(ArcSwap::new(Arc::new(ServerUserManager::default())))
         }
     }
 
@@ -77,14 +98,13 @@ impl ProxyListener {
     {
         let (stream, peer_addr) = self.listener.accept().await?;
         let stream = map_fn(stream);
-
-        // Create a ProxyServerStream and read the target address from it
+        debug!("++++++++++++++++++ 00000000");
         let stream = ProxyServerStream::from_stream_with_user_manager(
             self.context.clone(),
             stream,
             self.method,
             &self.key,
-            self.user_manager.clone(),
+            Some(self.user_manager_fancy.clone())
         );
 
         Ok((stream, peer_addr))

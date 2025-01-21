@@ -16,7 +16,6 @@ use tokio::{
     io::{AsyncRead, AsyncWrite, ReadBuf},
     time,
 };
-
 #[cfg(feature = "aead-cipher-2022")]
 use crate::relay::get_aead_2022_padding_size;
 use crate::{
@@ -67,7 +66,12 @@ impl ProxyClientStream<OutboundTcpStream> {
     where
         A: Into<Address>,
     {
-        ProxyClientStream::connect_with_opts(context, svr_cfg, addr, &DEFAULT_CONNECT_OPTS).await
+        ProxyClientStream::connect_with_opts(
+            context,
+            svr_cfg,
+            addr,
+            &DEFAULT_CONNECT_OPTS,
+        ).await
     }
 
     /// Connect to target `addr` via shadowsocks' server configured by `svr_cfg`
@@ -80,7 +84,13 @@ impl ProxyClientStream<OutboundTcpStream> {
     where
         A: Into<Address>,
     {
-        ProxyClientStream::connect_with_opts_map(context, svr_cfg, addr, opts, |s| s).await
+        ProxyClientStream::connect_with_opts_map(
+            context,
+            svr_cfg,
+            addr,
+            opts,
+            |s| s,
+        ).await
     }
 }
 
@@ -148,10 +158,16 @@ where
     /// Create a `ProxyClientStream` with a connected `stream` to a shadowsocks' server
     ///
     /// NOTE: `stream` must be connected to the server with the same configuration as `svr_cfg`, otherwise strange errors would occurs
-    pub fn from_stream<A>(context: SharedContext, stream: S, svr_cfg: &ServerConfig, addr: A) -> ProxyClientStream<S>
+    pub fn from_stream<A>(
+        context: SharedContext,
+        stream: S,
+        svr_cfg: &ServerConfig,
+        addr: A,
+    ) -> ProxyClientStream<S>
     where
         A: Into<Address>,
     {
+        // tod and here!!
         let addr = addr.into();
         let stream = CryptoStream::from_stream_with_identity(
             &context,
@@ -160,7 +176,7 @@ where
             svr_cfg.method(),
             svr_cfg.key(),
             svr_cfg.identity_keys(),
-            None,
+            &None,
         );
 
         #[cfg(not(feature = "aead-cipher-2022"))]
@@ -203,7 +219,11 @@ where
     S: AsyncRead + AsyncWrite + Unpin,
 {
     #[inline]
-    fn poll_read(self: Pin<&mut Self>, cx: &mut task::Context<'_>, buf: &mut ReadBuf<'_>) -> Poll<io::Result<()>> {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut task::Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
         #[allow(unused_mut)]
         let mut this = self.project();
 

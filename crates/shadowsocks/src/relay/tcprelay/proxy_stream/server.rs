@@ -6,12 +6,12 @@ use std::{
     sync::Arc,
     task::{self, Poll},
 };
-
+use arc_swap::ArcSwapAny;
 use bytes::Bytes;
 use futures::ready;
+use log::debug;
 use pin_project::pin_project;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
-
 use crate::{
     config::ServerUserManager,
     context::SharedContext,
@@ -57,7 +57,7 @@ impl<S> ProxyServerStream<S> {
         stream: S,
         method: CipherKind,
         key: &[u8],
-        user_manager: Option<Arc<ServerUserManager>>,
+        user_manager: Option<Arc<ArcSwapAny<Arc<ServerUserManager>>>>
     ) -> ProxyServerStream<S> {
         #[cfg(feature = "aead-cipher-2022")]
         let writer_state = if method.is_aead_2022() {
@@ -68,8 +68,10 @@ impl<S> ProxyServerStream<S> {
 
         #[cfg(not(feature = "aead-cipher-2022"))]
         let writer_state = ProxyServerStreamWriteState::Established;
-
+        
         const EMPTY_IDENTITY: [Bytes; 0] = [];
+        debug!("+++++++++++++++++++++");
+
         ProxyServerStream {
             stream: CryptoStream::from_stream_with_identity(
                 &context,
@@ -78,7 +80,7 @@ impl<S> ProxyServerStream<S> {
                 method,
                 key,
                 &EMPTY_IDENTITY,
-                user_manager,
+                &user_manager,
             ),
             context,
             writer_state,

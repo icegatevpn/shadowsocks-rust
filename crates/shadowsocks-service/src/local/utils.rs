@@ -13,6 +13,7 @@ use tokio::{
 };
 
 use crate::local::net::AutoProxyIo;
+use crate::me_debug;
 
 pub(crate) async fn establish_tcp_tunnel<P, S>(
     svr_cfg: &ServerConfig,
@@ -26,12 +27,12 @@ where
     S: AsyncRead + AsyncWrite + AutoProxyIo + Unpin,
 {
     if shadow.is_proxied() {
-        debug!(
+        me_debug!(
             "established tcp tunnel {} <-> {} through sever {} (outbound: {})",
             peer_addr,
             target_addr,
             svr_cfg.tcp_external_addr(),
-            svr_cfg.addr(),
+            svr_cfg.addr()
         );
     } else {
         return establish_tcp_tunnel_bypassed(plain, shadow, peer_addr, target_addr).await;
@@ -58,7 +59,7 @@ where
                 // Timeout. Send handshake to server.
                 let _ = shadow.write(&[]).await?;
 
-                trace!(
+                me_debug!(
                     "tcp tunnel {} -> {} (proxied) sent handshake without data",
                     peer_addr,
                     target_addr
@@ -69,7 +70,7 @@ where
 
     match copy_encrypted_bidirectional(svr_cfg.method(), shadow, plain).await {
         Ok((wn, rn)) => {
-            trace!(
+            me_debug!( // trace!
                 "tcp tunnel {} <-> {} (proxied) closed, L2R {} bytes, R2L {} bytes",
                 peer_addr,
                 target_addr,
@@ -78,7 +79,7 @@ where
             );
         }
         Err(err) => {
-            trace!(
+            me_debug!( // trace!
                 "tcp tunnel {} <-> {} (proxied) closed with error: {}",
                 peer_addr,
                 target_addr,

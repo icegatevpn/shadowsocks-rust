@@ -3,8 +3,8 @@
 //! Service for managing multiple relay servers. [Manage Multiple Users](https://github.com/shadowsocks/shadowsocks/wiki/Manage-Multiple-Users)
 
 use std::{io, net::SocketAddr, sync::Arc};
-
 use log::trace;
+use tokio::sync::Mutex;
 use shadowsocks::net::{AcceptOpts, ConnectOpts};
 
 use crate::{
@@ -13,12 +13,18 @@ use crate::{
     server::SERVER_DEFAULT_KEEPALIVE_TIMEOUT,
 };
 
+#[cfg(feature = "database")]
+use crate::mysql_db::Database;
+
+#[cfg(not(feature = "database"))]
+use crate::manager::server::Database;
+
 pub use self::server::{Manager, ManagerBuilder};
 
 pub mod server;
 
 /// Starts a manager server
-pub async fn run(config: Config) -> io::Result<()> {
+pub async fn run(config: Config, database: Option<&mut Arc<Mutex<Database>>>) -> io::Result<()> {
     assert_eq!(config.config_type, ConfigType::Manager);
 
     trace!("{:?}", config);
@@ -95,5 +101,8 @@ pub async fn run(config: Config) -> io::Result<()> {
         manager.add_server(svr_inst.config).await;
     }
 
-    manager.run().await
+    trace!("Run Manager...");
+    let rr = manager.run(database).await;
+    trace!("DONE! {:?}", rr);
+    rr
 }

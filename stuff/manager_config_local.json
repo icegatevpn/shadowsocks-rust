@@ -1,0 +1,27 @@
+{
+  "old_manager_address": "127.0.0.1",
+  "old_manager_port": 6100,
+  "manager_address": "/tmp/ssm.sock",
+  "manager_tcp_port": 8080,
+  "servers": [
+    {
+    "server": "127.0.0.1",
+    "old_outbound_bind_interface": "en0",
+    "server_port": 8387,
+    "password": "xXsEZIlaGPEtkuDZ4ZKM2lcFqtY74WcuUeLo+1384Gc=",
+    "method": "2022-blake3-aes-256-gcm",
+    "mode": "tcp_and_udp",
+    "users": [
+    	{"name": "userOne","password": "0X7im12oWeEc1kpA6JKS9ATf4SNZl/cObLgicta1T+o="}
+      ]
+    },
+    {
+    "server": "127.0.0.1",
+    "server_port": 8388,
+    "password": "HNc+pr6kJXrA3R6b37+8Hwj5ezQXDFOpcHJBbUB+ycY=",
+    "method": "aes-256-gcm",
+    "mode": "tcp_and_udp"
+    }
+  ]
+    
+}

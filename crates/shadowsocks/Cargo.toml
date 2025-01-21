@@ -18,7 +18,7 @@ maintenance = { status = "passively-maintained" }
 default = ["hickory-dns", "aead-cipher"]
 
 # Uses Hickory-DNS instead of tokio's builtin DNS resolver
-hickory-dns = ["hickory-resolver", "arc-swap", "notify"]
+hickory-dns = ["hickory-resolver", "notify"]
 # Hickory-DNS was renamed from Trust-DNS, keep compatibility.
 trust-dns = ["hickory-dns"]
 
@@ -35,13 +35,14 @@ aead-cipher = ["shadowsocks-crypto/v1-aead", "shadowsocks-crypto/ring"]
 # WARN: These non-standard AEAD ciphers are not officially supported by shadowsocks community
 aead-cipher-extra = ["aead-cipher", "shadowsocks-crypto/v1-aead-extra"]
 
+# Enable AEAD 2022
 aead-cipher-2022 = [
     "shadowsocks-crypto/v2",
     "shadowsocks-crypto/ring",
     "rand/small_rng",
     "aes",
     "lru_time_cache",
-] # Enable AEAD 2022
+]
 # Enable AEAD 2022 with extra ciphers
 aead-cipher-2022-extra = ["aead-cipher-2022", "shadowsocks-crypto/v2-extra"]
 
@@ -87,12 +88,20 @@ tokio = { version = "1.9.0", features = [
 ] }
 
 hickory-resolver = { version = "0.25.0-alpha", optional = true }
-arc-swap = { version = "1.7", optional = true }
+arc-swap = { version = "1.7"}
 notify = { version = "7.0", optional = true }
 
 aes = { version = "0.8", optional = true }
 blake3 = "1.5"
 shadowsocks-crypto = { version = "0.5.8", default-features = false }
+uuid = { version = "1.11.0", features = ["v4"] }
+
+# this was all removed, not sure why...
+#[target.'cfg(any(target_arch = "x86_64", target_arch = "aarch64"))'.dependencies]
+#shadowsocks-crypto = { version = "0.5.4", features = ["ring"] }
+#
+#[target.'cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))'.dependencies]
+#shadowsocks-crypto = { version = "0.5.4", features = [] }
 
 [target.'cfg(any(windows, target_os = "linux", target_os = "android", target_os = "freebsd", target_os = "macos", target_os = "ios", target_os = "watchos", target_os = "tvos"))'.dependencies]
 tokio-tfo = "0.3"

@@ -32,7 +32,7 @@ required-features = ["utility"]
 [[bin]]
 name = "ssmanager"
 path = "bin/ssmanager.rs"
-required-features = ["manager"]
+required-features = ["manager", "database"]
 
 [[bin]]
 name = "ssservice"
@@ -45,7 +45,7 @@ path = "bin/sswinservice.rs"
 required-features = ["winservice"]
 
 [workspace]
-members = ["crates/shadowsocks", "crates/shadowsocks-service"]
+members = ["crates/shadowsocks", "crates/shadowsocks-service", "crates/shadowsocks-vpn"]
 
 [profile.release]
 lto = "fat"
@@ -61,10 +61,13 @@ default = [
     "local",
     "server",
     "manager",
+    "database",
     "utility",
     "service",
     "local-http",
     "local-tunnel",
+    "local-tun",
+    "utility-url-outline",
     "local-socks4",
     "multi-threaded",
     "aead-cipher",
@@ -72,14 +75,7 @@ default = [
 ]
 
 # Basic Features
-basic = [
-    "logging",
-    "hickory-dns",
-    "local",
-    "server",
-    "multi-threaded",
-    "aead-cipher",
-]
+basic = ["logging", "hickory-dns", "local", "server", "multi-threaded"]
 
 # All Suggested Features
 full = [
@@ -90,6 +86,7 @@ full = [
     "local",
     "server",
     "manager",
+    "database",
     "utility",
     "service",
     "local-http",
@@ -121,7 +118,9 @@ local = ["shadowsocks-service/local"]
 # Enable remote server
 server = ["shadowsocks-service/server"]
 # Enable manager server
-manager = ["shadowsocks-service/manager"]
+manager = ["shadowsocks-service/manager", "database"]
+# Enable mysql database
+database = ["shadowsocks-service/database"]
 # Enable utility
 utility = ["qrcode"]
 # Enable service
@@ -204,7 +203,7 @@ aead-cipher = ["shadowsocks-service/aead-cipher"]
 
 # Enable extra AEAD ciphers
 # WARN: These non-standard AEAD ciphers are not officially supported by shadowsocks community
-aead-cipher-extra = ["aead-cipher", "shadowsocks-service/aead-cipher-extra"]
+aead-cipher-extra = ["shadowsocks-service/aead-cipher-extra"]
 
 # Enable AEAD 2022
 aead-cipher-2022 = ["shadowsocks-service/aead-cipher-2022"]
@@ -250,7 +249,11 @@ libc = { version = "0.2", features = ["extra_traits"] }
 rand = "0.8"
 
 futures = "0.3"
-tokio = { version = "1", features = ["rt", "signal"] }
+tokio = { version = "1", features = ["rt", "signal", "macros", "signal"] }
+# Web server
+axum = { version = "0.7" }
+uuid = { version = "1.0", features = ["v4", "serde"] }
+async-channel = "2.3.1"
 
 ipnet = { version = "2.10", optional = true }
 
@@ -263,6 +266,10 @@ rpmalloc = { version = "0.2", optional = true }
 shadowsocks-service = { version = "1.22.0", path = "./crates/shadowsocks-service" }
 
 windows-service = { version = "0.7", optional = true }
+chrono = "0.4.38"
+serde_json = "1.0"
+windows = "0.58.0"
+#bincode = "2.0.0-rc.3"
 
 [target.'cfg(unix)'.dependencies]
 daemonize = "0.5"

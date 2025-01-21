@@ -56,7 +56,8 @@ use std::{
     string::ToString,
     time::Duration,
 };
-
+use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE;
 use cfg_if::cfg_if;
 #[cfg(feature = "hickory-dns")]
 use hickory_resolver::config::{NameServerConfig, ResolverConfig};
@@ -65,6 +66,8 @@ use ipnet::IpNet;
 #[cfg(feature = "local-fake-dns")]
 use ipnet::{Ipv4Net, Ipv6Net};
 use log::warn;
+use rand::RngCore;
+use rand::rngs::OsRng;
 use serde::{Deserialize, Serialize};
 #[cfg(any(feature = "local-tunnel", feature = "local-dns"))]
 use shadowsocks::relay::socks5::Address;
@@ -140,6 +143,8 @@ struct SSConfig {
     manager_address: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     manager_port: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    manager_tcp_port: Option<u16>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     password: Option<String>,
@@ -1299,6 +1304,11 @@ pub struct Config {
     /// Local server configuration
     pub local: Vec<LocalInstanceConfig>,
 
+    pub url_key: Option<String>,
+
+    // Port that the tcp manager listens on
+    pub manager_tcp_port: Option<u16>,
+
     /// DNS configuration, uses system-wide DNS configuration by default
     ///
     /// Value could be a `IpAddr`, uses UDP DNS protocol with port `53`. For example: `8.8.8.8`
@@ -1470,7 +1480,8 @@ impl Config {
         Config {
             server: Vec::new(),
             local: Vec::new(),
-
+            manager_tcp_port: None,
+            url_key: None,
             dns: DnsConfig::default(),
             dns_cache_size: None,
             ipv6_first: false,
@@ -1525,6 +1536,7 @@ impl Config {
 
     fn load_from_ssconfig(config: SSConfig, config_type: ConfigType) -> Result<Config, Error> {
         let mut nconfig = Config::new(config_type);
+        nconfig.manager_tcp_port = config.manager_tcp_port;
 
         // Client
         //
@@ -2029,7 +2041,7 @@ impl Config {
             }
         }
 
-        // Ext servers
+        // Existing servers
         if let Some(servers) = config.servers {
             for svr in servers {
                 // Skip if server is disabled
@@ -2774,6 +2786,23 @@ impl Config {
         }
 
         Ok(())
+    }
+    /// Generates a 16-byte (128-bit) random key and returns it base64 URL-safe encoded
+    pub fn generate_manager_key() -> Result<String, Error> {
+        // Create a buffer for the 16-byte key
+        let mut key = vec![0u8; 16];
+
+        // Fill it with random bytes using the OS random number generator
+        OsRng
+            .try_fill_bytes(&mut key)
+            .map_err(|_| Error::new(
+                ErrorKind::MissingField,
+                "failed to fill bytes for key generation",
+                None,
+            ))?;
+
+        // Encode using base64 URL-safe encoding
+        Ok(URL_SAFE.encode(key))
     }
 }
 

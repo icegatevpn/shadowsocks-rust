@@ -9,6 +9,7 @@ use std::{
 
 use futures::future;
 use log::{error, trace};
+use tokio::sync::mpsc::UnboundedSender;
 use shadowsocks::{
     config::{ManagerAddr, ServerConfig},
     dns_resolver::DnsResolver,
@@ -17,7 +18,7 @@ use shadowsocks::{
     ManagerClient,
 };
 use tokio::time;
-
+use shadowsocks::config::ServerUserManager;
 use crate::{acl::AccessControl, config::SecurityConfig, net::FlowStat, utils::ServerHandle};
 
 use super::{context::ServiceContext, tcprelay::TcpServer, udprelay::UdpServer};
@@ -115,9 +116,11 @@ impl ServerBuilder {
     /// 1. Starts plugin (subprocess)
     /// 2. Starts TCP server (listener)
     /// 3. Starts UDP server (listener)
-    pub async fn build(mut self) -> io::Result<Server> {
+    /// returns tuple <Server>, <Option<TcpUserManagerSender>, Option<UdpUserManagerSender>>
+    pub async fn build(mut self) ->
+                                 io::Result<(Server, (Option<UnboundedSender<ServerUserManager>>,
+                                                      Option<UnboundedSender<ServerUserManager>>))> {
         let context = Arc::new(self.context);
-
         let mut plugin = None;
 
         if let Some(plugin_cfg) = self.svr_cfg.plugin() {
@@ -127,14 +130,17 @@ impl ServerBuilder {
         }
 
         let mut tcp_server = None;
+        let mut tcp_user_manager_sender: Option<UnboundedSender<ServerUserManager>> = None;
         if self.svr_cfg.mode().enable_tcp() {
-            let server = TcpServer::new(context.clone(), self.svr_cfg.clone(), self.accept_opts.clone()).await?;
+            let (server, sender) = TcpServer::new(context.clone(), self.svr_cfg.clone(), self.accept_opts.clone()).await?;
             tcp_server = Some(server);
+            tcp_user_manager_sender = Some(sender);
         }
 
         let mut udp_server = None;
+        let mut udp_user_manager_sender: Option<UnboundedSender<ServerUserManager>> = None;
         if self.svr_cfg.mode().enable_udp() {
-            let server = UdpServer::new(
+            let (server, sender) = UdpServer::new(
                 context.clone(),
                 self.svr_cfg.clone(),
                 self.udp_expiry_duration,
@@ -143,16 +149,17 @@ impl ServerBuilder {
             )
             .await?;
             udp_server = Some(server);
+            udp_user_manager_sender =  Some(sender);
         }
 
-        Ok(Server {
+        Ok((Server {
             context,
             svr_cfg: self.svr_cfg,
             tcp_server,
             udp_server,
             manager_addr: self.manager_addr,
             plugin,
-        })
+        }, (tcp_user_manager_sender, udp_user_manager_sender)))
     }
 }
 

@@ -3,8 +3,8 @@
 #[cfg(unix)]
 use std::path::PathBuf;
 use std::{collections::HashMap, io, net::SocketAddr, sync::Arc, time::Duration};
-
-use log::{error, info, trace};
+use bytes::Bytes;
+use log::{error, info, trace, warn, debug};
 use shadowsocks::{
     config::{Mode, ServerConfig, ServerType, ServerUser, ServerUserManager},
     context::{Context, SharedContext},
@@ -21,14 +21,22 @@ use shadowsocks::{
     plugin::PluginConfig,
     ManagerListener, ServerAddr,
 };
-use tokio::{sync::Mutex, task::JoinHandle};
-
+use tokio::sync::mpsc::UnboundedSender;
+use tokio::{sync::Mutex, task::JoinHandle, time};
+use shadowsocks::manager::domain_command::DomainCommand;
+use shadowsocks::manager::protocol::{AddUserRequest, AddUserResponse, CommandResponse, ManagerProtocol, RemoveUserRequest, RemoveUserResponse};
 use crate::{
     acl::AccessControl,
     config::{ManagerConfig, ManagerServerHost, ManagerServerMode, SecurityConfig},
     net::FlowStat,
-    server::ServerBuilder,
-};
+    server::ServerBuilder};
+
+#[cfg(feature = "database")]
+pub use crate::mysql_db::Database;
+
+#[cfg(not(feature = "database"))]
+pub struct Database;
+
 
 enum ServerInstanceMode {
     Builtin {
@@ -40,15 +48,19 @@ enum ServerInstanceMode {
     Standalone { flow_stat: u64 },
 }
 
+
 struct ServerInstance {
     mode: ServerInstanceMode,
     svr_cfg: ServerConfig,
+    tcp_user_manager_sender: Option<UnboundedSender<ServerUserManager>>,
+    udp_user_manager_sender: Option<UnboundedSender<ServerUserManager>>
 }
 
 impl Drop for ServerInstance {
     fn drop(&mut self) {
         #[allow(irrefutable_let_patterns)]
         if let ServerInstanceMode::Builtin { ref abortable, .. } = self.mode {
+            warn!("<< aborting SERVER ALSO!! {:?}", abortable.is_finished());
             abortable.abort();
         }
     }
@@ -61,6 +73,12 @@ impl ServerInstance {
             #[cfg(unix)]
             ServerInstanceMode::Standalone { flow_stat } => flow_stat,
         }
+    }
+
+    fn update_user_manager(&mut self, manager:&ServerUserManager) {
+        self.svr_cfg.set_user_manager(manager.clone());
+        self.udp_user_manager_sender.clone().unwrap().send(manager.clone()).unwrap();
+        self.tcp_user_manager_sender.clone().unwrap().send(manager.clone()).unwrap();
     }
 }
 
@@ -190,22 +208,71 @@ impl Manager {
     }
 
     /// Start serving
-    pub async fn run(mut self) -> io::Result<()> {
+    pub async fn run(mut self, mut database: Option<&mut Arc<Mutex<Database>>>) -> io::Result<()> {
         let local_addr = self.listener.local_addr()?;
         info!("shadowsocks manager server listening on {}", local_addr);
 
         loop {
             let (req, peer_addr) = match self.listener.recv_from().await {
-                Ok(r) => r,
+                Ok(r) => {
+                    debug!("received a manager config: {:?}", r);
+                    r
+                },
                 Err(err) => {
                     error!("manager recv_from error: {}", err);
                     continue;
                 }
             };
 
-            trace!("received {:?} from {:?}", req, peer_addr);
+            debug!("received {:?} from {:?}", req, peer_addr);
 
             match req {
+                ManagerRequest::Command(ref req) => {
+                    debug!("received a manager command: {:?}", req);
+                    let uuid = req.id;
+                    let response = match req.command.as_deref() {
+                        Some("list") => {
+                            String::from_utf8(self.handle_list().await.to_bytes()?)
+                        }
+                        Some("ping") => {
+                            String::from_utf8(self.handle_ping().await.to_bytes()?)
+                        }
+                        Some(thing) => {
+                            // Handle removeu config object
+                            if thing.starts_with("removeu") {
+                                let parts = thing.split(":").collect::<Vec<&str>>();
+                                let key = parts[1].trim();
+                                let ru = RemoveUserRequest { key: key.to_owned() };
+                                let response = self.handle_remove_user(&ru).await?;
+                                debug!("received remove user response: {:?}", response);
+                                String::from_utf8(response.to_bytes()?)
+                            // Handle addu config object
+                            } else if thing.starts_with("addu")  {
+                                // let parts = thing.split(":").collect::<Vec<&str>>();
+                                if let Some((_, config)) = thing.split_once(':') {
+                                    let config = serde_json::from_slice(config.as_bytes())?;
+                                    let au = AddUserRequest { config };
+                                    let response = self.handle_add_user(&au).await?;
+                                    debug!("received add user response: {:?}", response);
+                                    String::from_utf8(response.to_bytes()?)
+                                } else {
+                                    warn!("Failed to split addu command: {}", thing);
+                                    Ok(format!("Not implemented for {}", thing))
+                                }
+                            } else {
+                                warn!("received unrecognized command: {}", thing);
+                                Ok(format!("Not implemented for {}", thing))
+                            }
+                        }
+                        None => {
+                            Ok("Not implemented".to_string())
+                        }
+                    };
+                    let res_str = response.map_err(|_|"Error ???").unwrap();
+                    let response = DomainCommand::from_response(&res_str, uuid);
+                    let resp = CommandResponse(response);
+                    let _ = self.listener.send_to(&resp, &peer_addr).await;
+                }
                 ManagerRequest::Add(ref req) => match self.handle_add(req).await {
                     Ok(rsp) => {
                         let _ = self.listener.send_to(&rsp, &peer_addr).await;
@@ -222,23 +289,65 @@ impl Manager {
                 }
                 ManagerRequest::List(..) => {
                     let rsp = self.handle_list().await;
-                    let _ = self.listener.send_to(&rsp, &peer_addr).await;
+                    match self.listener.send_to(&rsp, &peer_addr).await {
+                        Ok(_) => {}
+                        Err(e) => {
+                            warn!("failed to send list response: {:?}", e);
+                        }
+                    }
                 }
                 ManagerRequest::Ping(..) => {
                     let rsp = self.handle_ping().await;
                     let _ = self.listener.send_to(&rsp, &peer_addr).await;
                 }
+                ManagerRequest::AddUser(ref req) => match self.handle_add_user(req).await {
+                    Ok(a) => {
+                        match self.listener.send_to(&a, &peer_addr).await {
+                            Ok(_) => {
+                                // Added to config, add to database
+                                #[cfg(feature = "database")]
+                                if let Some(ref mut db) = database {
+                                    let mut guard = db.lock().await;
+                                    if let Ok(_) = guard.add_or_update_users(&req.config) {
+                                        debug!("add user success!");
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                warn!("failed to send AddUser response: {:?}", e);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        warn!("added user failed: {}", e);
+                    }
+                }
                 ManagerRequest::Stat(ref stat) => self.handle_stat(stat).await,
+
+                ManagerRequest::RemoveUser(ref req) => match self.handle_remove_user(req).await {
+                    Ok(r) => {
+                        warn!("<<<<<< removed user: {:?}", r);
+                    }
+                    Err(e) => {
+                        warn!("<<<<<< removed user failed: {}", e);
+                    }
+                }
             }
         }
     }
 
-    /// Add a server programatically
+    /// Add a server programmatically
     pub async fn add_server(&self, svr_cfg: ServerConfig) {
         match self.svr_cfg.server_mode {
-            ManagerServerMode::Builtin => self.add_server_builtin(svr_cfg).await,
+            ManagerServerMode::Builtin => {
+                trace!("built-in server mode");
+                self.add_server_builtin(svr_cfg).await
+            },
             #[cfg(unix)]
-            ManagerServerMode::Standalone => self.add_server_standalone(svr_cfg).await,
+            ManagerServerMode::Standalone => {
+                trace!("standalone server mode");
+                self.add_server_standalone(svr_cfg).await
+            },
         }
     }
 
@@ -272,8 +381,26 @@ impl Manager {
         server_builder.set_security_config(&self.security);
 
         let server_port = server_builder.server_config().addr().port();
-
         let mut servers = self.servers.lock().await;
+        match servers.get(&server_port) {
+            Some(sss) => {
+                match &sss.mode {
+                    ServerInstanceMode::Builtin { flow_stat: _, abortable} => {
+                        warn!("Aborting SERVER!!");
+                        abortable.abort();
+                        // actually aborting the server can take a second or more, this
+                        // assures us that it's done.
+                        while !abortable.is_finished() {
+                            trace!("waiting ...");
+                            time::sleep(Duration::from_millis(500)).await;
+                        }
+                    }
+                    #[cfg(unix)]
+                    ServerInstanceMode::Standalone { .. } => {}
+                }
+            }
+            None => {}
+        }
         // Close existed server
         if let Some(v) = servers.remove(&server_port) {
             info!(
@@ -284,7 +411,10 @@ impl Manager {
         }
 
         let flow_stat = server_builder.flow_stat();
-        let server = match server_builder.build().await {
+        let (server, (
+            tcp_user_sender,
+            udp_user_sender
+        )) = match server_builder.build().await {
             Ok(s) => s,
             Err(err) => {
                 error!("failed to start server ({}), error: {}", svr_cfg.addr(), err);
@@ -292,14 +422,27 @@ impl Manager {
             }
         };
 
-        let abortable = tokio::spawn(async move { server.run().await });
+        let abortable = tokio::spawn(async move {
+            server.run().await
+        });
+
+        if let Some(um) = svr_cfg.user_manager() {
+            if let Some(ref sender) = tcp_user_sender {
+                sender.send(um.to_owned()).unwrap();
+            }
+            if let Some(ref sender) = udp_user_sender {
+                sender.send(um.to_owned()).unwrap();
+            }
+        }
 
         servers.insert(
             server_port,
             ServerInstance {
                 mode: ServerInstanceMode::Builtin { flow_stat, abortable },
                 svr_cfg,
-            },
+                tcp_user_manager_sender: tcp_user_sender,
+                udp_user_manager_sender: udp_user_sender,
+            }
         );
     }
 
@@ -448,14 +591,114 @@ impl Manager {
             return;
         }
 
-        // Greate. Record into the map
+        // Create. Record into the map
         servers.insert(
             port,
             ServerInstance {
                 mode: ServerInstanceMode::Standalone { flow_stat: 0 },
                 svr_cfg,
+                tcp_user_manager_sender: None,
+                udp_user_manager_sender: None,
             },
         );
+    }
+
+    // async fn get_tcp_user_manager_sender(&self, port:u16)-> Option<UnboundedSender<ServerUserManager>> {
+    //     let mut found :Option<UnboundedSender<ServerUserManager>> = None;
+    //     let servers = self.servers.lock().await;
+    //     for (_, server) in servers.iter() {
+    //         let same = server.svr_cfg.addr().port() == port;
+    //         if same {
+    //             found =  server.tcp_user_manager_sender.clone();
+    //         }
+    //         break;
+    //     }
+    //     found
+    // }
+    // async fn get_udp_user_manager_sender(&self, port:u16)-> Option<UnboundedSender<ServerUserManager>> {
+    //     let mut found :Option<UnboundedSender<ServerUserManager>> = None;
+    //     let servers = self.servers.lock().await;
+    //     for (_, server) in servers.iter() {
+    //         let same = server.svr_cfg.addr().port() == port;
+    //         if same {
+    //             found =  server.udp_user_manager_sender.clone();
+    //         }
+    //         break;
+    //     }
+    //     found
+    // }
+
+    async fn get_config(&self, port: u16) -> Option<ServerConfig> {
+        let mut found :Option<ServerConfig> = None;
+        let servers = self.servers.lock().await;
+        for (_, server) in servers.iter() {
+            let same = server.svr_cfg.addr().port() == port;
+            if same {
+                found =  Some(server.svr_cfg.clone());
+            }
+        }
+        found
+    }
+
+    async fn handle_remove_user(&self, remove_request: &RemoveUserRequest) ->  io::Result<RemoveUserResponse> {
+        let user_hash: String = remove_request.key.clone();
+        let key_in = ServerUser::str_to_key(&user_hash).expect("failed to decode Key");
+        let mut servers = self.servers.lock().await;
+
+        let matching_server = servers.iter_mut().find(|(_, server_instance)| {
+            server_instance
+                .svr_cfg
+                .user_manager()
+                .map(|user_manager| {
+                    let users_map: &HashMap<Bytes, Arc<ServerUser>> = &user_manager.users;
+                    users_map
+                        .values()
+                        .any(|user| user.key() == key_in)
+                })
+                .unwrap_or(false)
+        });
+        if let Some((_, server_instance)) = matching_server {
+            let bytes: Bytes = key_in.into();
+            let identity = ServerUser::key_to_identity(&bytes);
+            let mut user_manager = server_instance.svr_cfg.copy_user_manager();
+            if let Some(_) = user_manager.remove_user(&identity) {
+                server_instance.update_user_manager(&user_manager);
+            }
+
+            Ok(RemoveUserResponse("User found and processed".to_string()))
+        } else {
+            Ok(RemoveUserResponse("User not found".to_string()))
+        }
+    }
+
+    async fn handle_add_user(&self, req: &AddUserRequest) -> io::Result<AddUserResponse> {
+        let new_config = &req.config;
+        let port  = new_config.server_port;
+        if let Some(mut existing_config) =self.get_config(port).await {
+            match ServerUserManager::user_manager_with_users(&new_config.users) {
+                Ok(mut new_manager) => {
+                    if let Some(old_manager) = existing_config.user_manager() {
+                        old_manager.users_iter().for_each(|u| {
+                            new_manager.add_user(u.clone());
+                        });
+                    }
+                    let mut servers = self.servers.lock().await;
+                    let matching_server = servers.iter_mut().find(|(_, srv)|{
+                        srv.svr_cfg.addr().port() == port
+                    });
+                    if let Some((_,matching_server)) = matching_server {
+                        matching_server.update_user_manager(&new_manager);
+                    }
+
+                    // update existing config!!
+                    existing_config.set_user_manager(new_manager);
+                },
+                Err(err) => {
+                    error!("Failed to Build new ServerUserManager: {:?}", err);
+                }
+            }
+        }
+        Ok(AddUserResponse("Done".into()))
     }
 
     async fn handle_add(&self, req: &AddRequest) -> io::Result<AddResponse> {
@@ -526,29 +769,13 @@ impl Manager {
 
         svr_cfg.set_mode(mode.unwrap_or(self.svr_cfg.mode));
 
-        if let Some(ref users) = req.users {
-            let mut user_manager = ServerUserManager::new();
-
-            for user in users.iter() {
-                let user = match ServerUser::with_encoded_key(&user.name, &user.password) {
-                    Ok(u) => u,
-                    Err(..) => {
-                        error!(
-                            "users[].password must be encoded with base64, but found: {}",
-                            user.password
-                        );
-
-                        return Err(io::Error::new(
-                            io::ErrorKind::Other,
-                            "users[].password must be encoded with base64",
-                        ));
-                    }
-                };
-
-                user_manager.add_user(user);
+        match ServerUserManager::user_manager_with_users(req.users.as_ref().expect("missing users")) {
+            Ok(manager) => {
+                svr_cfg.set_user_manager(manager);
             }
-
-            svr_cfg.set_user_manager(user_manager);
+            Err(e) => {
+                return Err(e);
+            }
         }
 
         self.add_server(svr_cfg).await;
@@ -590,7 +817,7 @@ impl Manager {
                 users = Some(vu);
             }
 
-            let sc = protocol::ServerConfig {
+            let sc = protocol::ServerConfigOther {
                 server_port: svr_cfg.addr().port(),
                 password: svr_cfg.password().to_owned(),
                 method: None,
@@ -690,6 +917,8 @@ impl Manager {
                             vac.insert(ServerInstance {
                                 mode: ServerInstanceMode::Standalone { flow_stat: *flow },
                                 svr_cfg,
+                                tcp_user_manager_sender: None,
+                                udp_user_manager_sender: None,
                             });
                         }
                     }

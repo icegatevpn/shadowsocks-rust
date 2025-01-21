@@ -4,11 +4,10 @@
 //! or you could specify a configuration file. The format of configuration file is defined
 //! in mod `config`.
 //!
-//! *It should be notice that the extended configuration file is not suitable for the server
+//! *It should be noted that the extended configuration file is not suitable for the server
 //! side.*
 
 use std::process::ExitCode;
-
 use clap::Command;
 use shadowsocks_rust::service::manager;
 

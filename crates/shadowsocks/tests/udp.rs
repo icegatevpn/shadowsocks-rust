@@ -92,7 +92,7 @@ async fn udp_tunnel_echo(
 
         let mut recv_buf = vec![0u8; 65536];
         loop {
-            let (n, peer_addr, remote_addr, ..) = socket.recv_from(&mut recv_buf).await.unwrap();
+            let (n, peer_addr, remote_addr, ..) = socket.recv_from(&mut recv_buf, None).await.unwrap();
             let _ = handle_udp_server_client(peer_addr, remote_addr, &recv_buf[..n], &socket).await;
         }
     });

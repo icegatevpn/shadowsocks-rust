@@ -2,7 +2,7 @@
 
 use std::io;
 
-use log::warn;
+use log::{warn};
 
 use crate::{config::ManagerAddr, context::Context, relay::udprelay::MAXIMUM_UDP_PAYLOAD_SIZE};
 

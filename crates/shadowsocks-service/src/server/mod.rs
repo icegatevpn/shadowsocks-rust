@@ -158,18 +158,18 @@ pub async fn run(config: Config) -> io::Result<()> {
 
         server_builder.set_security_config(&config.security);
 
-        let server = server_builder.build().await?;
-        servers.push(server);
+        let (server, senders) = server_builder.build().await?;
+        servers.push((server, senders));
     }
 
     if servers.len() == 1 {
-        let server = servers.pop().unwrap();
+        let (server, _) = servers.pop().unwrap();
         return server.run().await;
     }
 
     let mut vfut = Vec::with_capacity(servers.len());
 
-    for server in servers {
+    for (server, _) in servers {
         vfut.push(ServerHandle(tokio::spawn(async move { server.run().await })));
     }
 

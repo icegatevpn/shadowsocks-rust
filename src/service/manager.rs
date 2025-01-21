@@ -1,27 +1,27 @@
 //! Server Manager launchers
 
 use std::{future::Future, net::IpAddr, path::PathBuf, process::ExitCode, time::Duration};
-
+use std::sync::Arc;
 use clap::{builder::PossibleValuesParser, Arg, ArgAction, ArgGroup, ArgMatches, Command, ValueHint};
 use futures::future::{self, Either};
-use log::{info, trace};
+use log::{debug, info, trace, warn};
 use tokio::{
     self,
     runtime::{Builder, Runtime},
 };
-
+use tokio::sync::Mutex;
 #[cfg(unix)]
 use shadowsocks_service::config::ManagerServerMode;
-use shadowsocks_service::{
-    acl::AccessControl,
-    config::{Config, ConfigType, ManagerConfig, ManagerServerHost},
-    run_manager,
-    shadowsocks::{
-        config::{ManagerAddr, Mode},
-        crypto::{available_ciphers, CipherKind},
-        plugin::PluginConfig,
-    },
-};
+#[cfg(feature = "database")]
+use shadowsocks_service::mysql_db::Database as Database;
+#[cfg(not(feature = "database"))]
+use shadowsocks_service::manager::server::Database as Database;
+
+use shadowsocks_service::{acl::AccessControl, config::{Config, ConfigType, ManagerConfig, ManagerServerHost, }, run_manager, shadowsocks::{
+    config::{ManagerAddr, Mode},
+    crypto::{available_ciphers, CipherKind},
+    plugin::PluginConfig,
+}};
 
 #[cfg(feature = "logging")]
 use crate::logging;
@@ -29,6 +29,9 @@ use crate::{
     config::{Config as ServiceConfig, RuntimeMode},
     monitor, vparser,
 };
+// use crate::service::mysql_db::Database;
+use crate::service::web_service::run_web_service;
+
 
 /// Defines command line options
 pub fn define_command_line_options(mut app: Command) -> Command {
@@ -42,6 +45,31 @@ pub fn define_command_line_options(mut app: Command) -> Command {
                 .value_parser(clap::value_parser!(PathBuf))
                 .value_hint(ValueHint::FilePath)
                 .help("Shadowsocks configuration file (https://shadowsocks.org/doc/configs.html), the only required fields are \"manager_address\" and \"manager_port\". Servers defined will be created when process is started."),
+        )
+        .arg(
+            Arg::new("URL_KEY")
+                .long("url_key")
+                .num_args(1)
+                .action(ArgAction::Set)
+                .value_parser(clap::value_parser!(PathBuf))
+                .help("Specify Url Key for manager webserice"),
+        )
+        .arg(
+            Arg::new("MANAGER_TCP_PORT")
+                .long("manager-tcp-port")
+                .num_args(1)
+                .action(ArgAction::Set)
+                .value_parser(clap::value_parser!(u16))
+                .help("Port for the manager's web service to listen on"),
+        )
+        .arg(
+            Arg::new("DATABASE")
+                .short('D')
+                .long("database-path")
+                .num_args(1)
+                .action(ArgAction::Set)
+                .value_parser(clap::value_parser!(PathBuf))
+                .help("MySql database path"),
         )
         .arg(
             Arg::new("UDP_ONLY")
@@ -266,9 +294,34 @@ pub fn define_command_line_options(mut app: Command) -> Command {
     app
 }
 
+static SOCKET_PATH: &str =  "/tmp/ssm.sock";
+static DEFAULT_DATABASE: &str = "ss_manager.db";
+
+#[cfg(feature = "database")]
+fn create_default_database() -> Database {
+    Database::new(DEFAULT_DATABASE).expect("Failed to create default database")
+}
+
+pub fn set_url_key(config: &mut Config, url_key: Option<String>, database: &Database) {
+    config.url_key = match url_key {
+        Some(k) => Some(String::from(k)),
+        None => {
+            database.get_url_key()
+                .unwrap_or(Some(Config::generate_manager_key().expect("Failed to generate URL key!")))
+        }
+    };
+}
 /// Create `Runtime` and `main` entry
-pub fn create(matches: &ArgMatches) -> Result<(Runtime, impl Future<Output = ExitCode>), ExitCode> {
-    let (config, runtime) = {
+fn create(matches: &ArgMatches) -> Result<(Runtime, impl Future<Output = ExitCode>), ExitCode> {
+    let key_binding = matches.get_one::<PathBuf>("URL_KEY").cloned()
+        .or_else(|| {None});//.unwrap();
+    let url_key = match key_binding {
+        Some(k) => Some(k.to_str().unwrap().to_string()),
+        _ => None,
+    };
+    debug!("key: {:?}", url_key);
+
+    let (config, runtime, database) = {
         let config_path_opt = matches.get_one::<PathBuf>("CONFIG").cloned().or_else(|| {
             if !matches.contains_id("SERVER_CONFIG") {
                 match crate::config::get_default_config_path("manager.json") {
@@ -287,7 +340,7 @@ pub fn create(matches: &ArgMatches) -> Result<(Runtime, impl Future<Output = Exi
             Some(ref config_path) => match ServiceConfig::load_from_file(config_path) {
                 Ok(c) => c,
                 Err(err) => {
-                    eprintln!("loading config {config_path:?}, {err}");
+                    eprintln!("loading config e {config_path:?}, {err}");
                     return Err(crate::EXIT_CODE_LOAD_CONFIG_FAILURE.into());
                 }
             },
@@ -307,16 +360,86 @@ pub fn create(matches: &ArgMatches) -> Result<(Runtime, impl Future<Output = Exi
 
         trace!("{:?}", service_config);
 
+        #[cfg(feature = "database")]
+        let mut database =  matches.get_one::<PathBuf>("DATABASE").cloned()
+        .map(|path| Database::new(&path))
+        .transpose()
+        .expect("Failed to open database");
+
+        #[cfg(not(feature = "database"))]
+        let mut database = None;
+
+        #[cfg(feature = "database")]
+        if database.is_none() {
+            warn!("No Database Configured, using default database: {:?}", DEFAULT_DATABASE);
+            database = Some(create_default_database())
+        }
+
+        // Load config and handle database updates
         let mut config = match config_path_opt {
-            Some(cpath) => match Config::load_from_file(&cpath, ConfigType::Manager) {
-                Ok(cfg) => cfg,
-                Err(err) => {
-                    eprintln!("loading config {cpath:?}, {err}");
-                    return Err(crate::EXIT_CODE_LOAD_CONFIG_FAILURE.into());
+            Some(cpath) => {
+                // Load config from file first
+                let mut cfg = match Config::load_from_file(&cpath, ConfigType::Manager) {
+                    Ok(cfg) => cfg,
+                    Err(err) => {
+                        eprintln!("Error loading config {cpath:?}, {err}");
+                        return Err(crate::EXIT_CODE_LOAD_CONFIG_FAILURE.into());
+                    }
+                };
+
+                // If we have both a config file and database, update the database with the Config
+                #[cfg(feature = "database")]
+                if let Some(ref mut db) = database {
+                    set_url_key(&mut cfg, url_key, db);
+                    if let Err(err) = db.save_config_to_tables(&cfg) {
+                        eprintln!("Error saving config to database: {err}");
+                    } else {
+                        println!("Successfully saved config to database");
+                    }
+                }
+
+                cfg
+            },
+            None => {
+                match &database {
+                    None => Config::new(ConfigType::Manager),
+                    #[cfg(not(feature = "database"))]
+                    Some(db) => {
+                        eprintln!("Socket command support with no database has not been implemented.");
+                        Config::new(ConfigType::Manager)
+                    }
+                    #[cfg(feature = "database")]
+                    Some(db) => {
+                        // Create base config with manager
+                        let mut config = Config::new(ConfigType::Manager);
+                        set_url_key(&mut config, url_key, db);
+                        #[cfg(unix)]
+                        if cfg!(unix) {
+                            config.manager = Some(ManagerConfig::new(ManagerAddr::UnixSocketAddr(SOCKET_PATH.into())));
+                        } else {
+                            eprintln!("Socket command support for Non unix systems has not been implemented yet.");
+                        }
+
+                        // Load any additional server configs from DB
+                        match db.load_config_from_tables() {
+                            Ok(servers) => {
+                                // Copy over the server configs
+                                config.server = servers;
+                                config
+                            },
+                            Err(err) => {
+                                warn!("Failed to load config from database: {}", err);
+                                config
+                            }
+                        }
+                    }
                 }
             },
-            None => Config::new(ConfigType::Manager),
         };
+
+        if let Some(port) = matches.get_one::<u16>("MANAGER_TCP_PORT") {
+            config.manager_tcp_port = Some(*port);
+        }
 
         if matches.get_flag("TCP_NO_DELAY") {
             config.no_delay = true;
@@ -500,7 +623,9 @@ pub fn create(matches: &ArgMatches) -> Result<(Runtime, impl Future<Output = Exi
         info!("shadowsocks manager {} build {}", crate::VERSION, crate::BUILD_TIME);
 
         let mut builder = match service_config.runtime.mode {
-            RuntimeMode::SingleThread => Builder::new_current_thread(),
+            RuntimeMode::SingleThread => {
+                Builder::new_current_thread()
+            },
             #[cfg(feature = "multi-threaded")]
             RuntimeMode::MultiThread => {
                 let mut builder = Builder::new_multi_thread();
@@ -514,13 +639,36 @@ pub fn create(matches: &ArgMatches) -> Result<(Runtime, impl Future<Output = Exi
 
         let runtime = builder.enable_all().build().expect("create tokio Runtime");
 
-        (config, runtime)
+        (config, runtime, database)
     };
 
     let main_fut = async move {
-        let abort_signal = monitor::create_signal_monitor();
-        let server = run_manager(config);
 
+        let host = format!("{}:{}",
+                           config.server.first()
+                               .expect("No server")
+                               .config.addr()
+                               .host(),
+                           config.manager_tcp_port.unwrap_or(8080)
+        );
+
+        let abort_signal = monitor::create_signal_monitor();
+        let db = database.unwrap();
+        let mut db = Arc::new(Mutex::new(db));
+        // Clone the Arc for the web service
+        let web_db = db.clone();
+
+        // config.url_key should already be set, I think this is superfluous.
+        let url_key = match &config.url_key {
+            Some(key) => key.to_string(),
+            _ => Config::generate_manager_key().expect("Failed to generate URL key!")
+        };
+
+        let server = run_manager(config, Some(&mut db));
+
+        tokio::spawn(run_web_service(SOCKET_PATH.to_string(), host, url_key, web_db));
+
+        warn!("Started!!!");
         tokio::pin!(abort_signal);
         tokio::pin!(server);
 
@@ -536,7 +684,10 @@ pub fn create(matches: &ArgMatches) -> Result<(Runtime, impl Future<Output = Exi
                 crate::EXIT_CODE_SERVER_ABORTED.into()
             }
             // The abort signal future resolved. Means we should just exit.
-            Either::Right(_) => ExitCode::SUCCESS,
+            Either::Right(_) => {
+                warn!("server exiting!");
+                ExitCode::SUCCESS
+            },
         }
     };
 

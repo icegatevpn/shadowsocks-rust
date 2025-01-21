@@ -1,0 +1,45 @@
+[package]
+name = "shadowsocks-vpn"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "shadowsocks_vpn"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[profile.release]
+panic = 'abort'  # Disable unwinding
+lto = true      # Enable link-time optimization
+codegen-units = 1 # Optimize for size
+strip = true    # Strip symbols
+
+[dependencies]
+
+shadowsocks = { path = "../shadowsocks" }
+shadowsocks-service = { path = "../shadowsocks-service", features = ["local", "local-tun"], default-features = false }
+tokio = { version = "1.38", features = ["full", "io-util"] }
+futures = "0.3"
+log = "0.4"
+ipnet = "2.10.1"
+once_cell = "1.20.2"
+env_logger = "0.11.6"
+serde_json = "1.0.134"
+serde = { version = "1.0.217", features = ["derive"] }
+# Windows::
+async-trait = "0.1"
+#windows-sys = { version = "0.59.0", features = ["Win32_NetworkManagement_IpHelper"] }
+signal-hook = "0.3.17"
+
+# Android-specific dependencies
+[target.'cfg(target_os = "android")'.dependencies]
+jni = { version = "0.21", features = ["invocation"] }
+android_logger = "0.14"
+ndk-context = "0.1"
+
+[features]
+default = ["aead-cipher-2022", "local"]
+local = ["shadowsocks-service/local", "shadowsocks-service/local-dns", "shadowsocks-service/local-tun"]
+stream-cipher = ["shadowsocks-service/stream-cipher"]
+aead-cipher = ["shadowsocks-service/aead-cipher"]
+aead-cipher-extra = ["shadowsocks-service/aead-cipher-extra"]
+aead-cipher-2022 = ["shadowsocks-service/aead-cipher-2022"]

@@ -20,7 +20,8 @@ use tokio::{
     net::TcpStream as TokioTcpStream,
     time,
 };
-
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
+use shadowsocks::config::ServerUserManager;
 use crate::net::{utils::ignore_until_end, MonProxyStream};
 
 use super::context::ServiceContext;
@@ -29,6 +30,7 @@ use super::context::ServiceContext;
 pub struct TcpServer {
     context: Arc<ServiceContext>,
     svr_cfg: ServerConfig,
+    user_manager_rcv: Option<UnboundedReceiver<ServerUserManager>>,
     listener: ProxyListener,
 }
 
@@ -37,13 +39,15 @@ impl TcpServer {
         context: Arc<ServiceContext>,
         svr_cfg: ServerConfig,
         accept_opts: AcceptOpts,
-    ) -> io::Result<TcpServer> {
+    ) -> io::Result<(TcpServer, UnboundedSender<ServerUserManager>)> {
         let listener = ProxyListener::bind_with_opts(context.context(), &svr_cfg, accept_opts).await?;
-        Ok(TcpServer {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        Ok((TcpServer {
             context,
             svr_cfg,
+            user_manager_rcv: Some(rx),
             listener,
-        })
+        }, tx))
     }
 
     /// Server's configuration
@@ -57,14 +61,22 @@ impl TcpServer {
     }
 
     /// Start server's accept loop
-    pub async fn run(self) -> io::Result<()> {
+    pub async fn run(mut self) -> io::Result<()> {
         info!(
             "shadowsocks tcp server listening on {}, inbound address {}",
             self.listener.local_addr().expect("listener.local_addr"),
             self.svr_cfg.addr()
         );
 
+        let listening = match self.user_manager_rcv.take() {
+            Some(receiver) => Some(self.listener.listen_for_users(receiver)),
+            None => None
+        };
+
         loop {
+            if !listening.is_some() {
+                warn!("TCP User Manager receiver has stopped listening!");
+            }
             let flow_stat = self.context.flow_stat();
 
             let (local_stream, peer_addr) = match self
@@ -93,6 +105,7 @@ impl TcpServer {
                 timeout: self.svr_cfg.timeout(),
             };
 
+            // tokio::join!(&listening);
             tokio::spawn(async move {
                 if let Err(err) = client.serve().await {
                     debug!("tcp server stream aborted with error: {}", err);
@@ -154,7 +167,7 @@ impl TcpServerClient {
                 // https://github.com/shadowsocks/shadowsocks-rust/issues/292
                 //
                 // Keep connection open. Except AEAD-2022
-                warn!("tcp handshake failed. peer: {}, {}", self.peer_addr, err);
+                error!("tcp handshake failed. peer: {}, {}", self.peer_addr, err);
 
                 #[cfg(feature = "aead-cipher-2022")]
                 if self.method.is_aead_2022() {

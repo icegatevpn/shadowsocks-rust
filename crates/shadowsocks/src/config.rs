@@ -2,20 +2,22 @@
 
 #[cfg(unix)]
 use std::path::PathBuf;
+use crate::manager::protocol::{ServerConfigOther, ServerUserConfig};
+use base64::{DecodeError, Engine as _};
 use std::{
     collections::HashMap,
     fmt::{self, Debug, Display},
+    io,
     net::SocketAddr,
     str::{self, FromStr},
     sync::Arc,
     time::Duration,
 };
 
-use base64::Engine as _;
 use byte_string::ByteStr;
 use bytes::Bytes;
 use cfg_if::cfg_if;
-use log::{error, warn};
+use log::{debug, error, warn};
 use thiserror::Error;
 use url::{self, Url};
 
@@ -38,7 +40,7 @@ const AEAD2022_PASSWORD_BASE64_ENGINE: base64::engine::GeneralPurpose = base64::
         .with_decode_padding_mode(base64::engine::DecodePaddingMode::Indifferent),
 );
 
-const URL_PASSWORD_BASE64_ENGINE: base64::engine::GeneralPurpose = base64::engine::GeneralPurpose::new(
+pub const URL_PASSWORD_BASE64_ENGINE: base64::engine::GeneralPurpose = base64::engine::GeneralPurpose::new(
     &base64::alphabet::URL_SAFE,
     base64::engine::GeneralPurposeConfig::new()
         .with_encode_padding(false)
@@ -270,8 +272,7 @@ impl ServerUser {
         let name = name.into();
         let key = key.into();
 
-        let hash = blake3::hash(&key);
-        let identity_hash = Bytes::from(hash.as_bytes()[0..16].to_owned());
+        let identity_hash = Self::key_to_identity(&key);
 
         ServerUser {
             name,
@@ -280,12 +281,20 @@ impl ServerUser {
         }
     }
 
+    pub fn key_to_identity(key: &Bytes) -> Bytes {
+        let hash = blake3::hash(&key);
+        Bytes::from(hash.as_bytes()[0..16].to_owned())
+    }
+    pub fn str_to_key(str: &str) -> Result<Vec<u8>, DecodeError> {
+        USER_KEY_BASE64_ENGINE.decode(str)
+    }
+
     /// Create a user from encoded key
     pub fn with_encoded_key<N>(name: N, key: &str) -> Result<ServerUser, ServerUserError>
     where
         N: Into<String>,
     {
-        let key = USER_KEY_BASE64_ENGINE.decode(key)?;
+        let key = Self::str_to_key(key)?; //USER_KEY_BASE64_ENGINE.decode(key)?;
         Ok(ServerUser::new(name, key))
     }
 
@@ -330,7 +339,7 @@ pub enum ServerUserError {
 /// Server multi-users manager
 #[derive(Clone, Debug)]
 pub struct ServerUserManager {
-    users: HashMap<Bytes, Arc<ServerUser>>,
+    pub users: HashMap<Bytes, Arc<ServerUser>>,
 }
 
 impl ServerUserManager {
@@ -339,9 +348,40 @@ impl ServerUserManager {
         ServerUserManager { users: HashMap::new() }
     }
 
+    pub fn user_manager_with_users(config: &Vec<ServerUserConfig>) -> io::Result<ServerUserManager> {
+        let mut user_manager = ServerUserManager::new();
+        for user in config.iter() {
+            let user = match ServerUser::with_encoded_key(&user.name, &user.password) {
+                Ok(u) => u,
+                Err(..) => {
+                    error!(
+                            "users[].password must be encoded with base64, but found: {}",
+                            user.password
+                        );
+
+                    return Err(io::Error::new(
+                        io::ErrorKind::Other,
+                        "users[].password must be encoded with base64",
+                    ));
+                }
+            };
+
+            user_manager.add_user(user);
+        }
+        Ok(user_manager)
+    }
+
+    pub fn from_server_config_other(server_config: ServerConfigOther) -> io::Result<ServerUserManager> {
+        Self::user_manager_with_users(server_config.users.expect("failed to get users").as_ref())
+    }
+
     /// Add a new user
-    pub fn add_user(&mut self, user: ServerUser) {
-        self.users.insert(user.clone_identity_hash(), Arc::new(user));
+    pub fn add_user(&mut self, user: ServerUser)-> Option<Arc<ServerUser>> {
+        self.users.insert(user.clone_identity_hash(), Arc::new(user))
+    }
+    // &USER_KEY_BASE64_ENGINE.encode(&user.1.key());
+    pub fn remove_user(&mut self, user_identity_hash: &Bytes)-> Option<Arc<ServerUser>> {
+        self.users.remove(user_identity_hash)
     }
 
     /// Get user by hash key
@@ -418,6 +458,7 @@ pub struct ServerConfig {
     /// Extensible Identity Headers (AEAD-2022)
     ///
     /// For server, support multi-users with EIH
+
     user_manager: Option<Arc<ServerUserManager>>,
 
     /// Plugin config
@@ -459,6 +500,10 @@ fn make_derived_key(method: CipherKind, password: &str, enc_key: &mut [u8]) -> R
 
         return Ok(());
     }
+//  } else { // was I don't something here?
+//         openssl_bytes_to_key(password.as_bytes(), enc_key);
+//     }
+// }
 
     cfg_if! {
         if #[cfg(any(feature = "stream-cipher", feature = "aead-cipher"))] {
@@ -581,6 +626,7 @@ impl ServerConfig {
         })
     }
 
+
     /// Set encryption method
     pub fn set_method<P>(&mut self, method: CipherKind, password: P) -> Result<(), ServerConfigError>
     where
@@ -648,6 +694,18 @@ impl ServerConfig {
     /// Clone user manager (Server)
     pub fn clone_user_manager(&self) -> Option<Arc<ServerUserManager>> {
         self.user_manager.clone()
+    }
+
+    pub fn copy_user_manager(&self) -> ServerUserManager {
+        // todo to this
+        let mut user_manager = ServerUserManager::new();
+        if let Some(um) = self.user_manager.as_ref() {
+            // um.users.iter().for_each(|(key, user)| {
+            um.users_iter().for_each(|user| {
+                user_manager.add_user(user.clone());
+            })
+        };
+        user_manager
     }
 
     /// Get method
@@ -1218,6 +1276,7 @@ impl FromStr for ManagerAddr {
     type Err = ManagerAddrError;
 
     fn from_str(s: &str) -> Result<ManagerAddr, ManagerAddrError> {
+        debug!("<< from here!!!");
         match s.find(':') {
             Some(pos) => {
                 // Contains a ':' in address, must be IP:Port or Domain:Port
@@ -1229,7 +1288,10 @@ impl FromStr for ManagerAddr {
                         let (sdomain, sport) = (sdomain.trim(), sport[1..].trim());
 
                         match sport.parse::<u16>() {
-                            Ok(port) => Ok(ManagerAddr::DomainName(sdomain.to_owned(), port)),
+                            Ok(port) => {
+                                debug!("<< a port::{}", port);
+                                Ok(ManagerAddr::DomainName(sdomain.to_owned(), port))
+                            },
                             Err(..) => Err(ManagerAddrError),
                         }
                     }

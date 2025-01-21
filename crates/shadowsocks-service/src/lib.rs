@@ -71,10 +71,25 @@ pub mod net;
 pub mod server;
 mod sys;
 mod utils;
+#[cfg(feature = "database")]
+pub mod mysql_db;
+// mod tokio_mysql_db;
+pub mod url_generator;
+// Not sure if we relly need or want the database monitor, but I'm holding onto this for now.
+// mod database_monitor;
 
 /// Default UDP association's expire duration
 #[allow(dead_code)]
 const DEFAULT_UDP_EXPIRY_DURATION: Duration = Duration::from_secs(5 * 60);
+
+#[macro_export]
+macro_rules! me_debug {
+    ( $( $x:expr ),* ) => {
+        {
+            log::debug!("<<<< {}", format!($( $x ),*));
+        }
+    };
+}
 
 #[cfg(feature = "hickory-dns")]
 fn hint_support_default_system_resolver() -> bool {
