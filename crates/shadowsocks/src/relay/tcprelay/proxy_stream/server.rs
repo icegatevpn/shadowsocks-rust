@@ -68,7 +68,7 @@ impl<S> ProxyServerStream<S> {
 
         #[cfg(not(feature = "aead-cipher-2022"))]
         let writer_state = ProxyServerStreamWriteState::Established;
-        
+
         const EMPTY_IDENTITY: [Bytes; 0] = [];
         debug!("+++++++++++++++++++++");
 
