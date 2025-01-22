@@ -237,7 +237,7 @@ pub mod android {
     }
 
     #[no_mangle]
-    pub extern "system" fn Java_com_icegatevpn_client_service_ShadowsocksVPN_create(
+    pub extern "system" fn Java_com_icegatevpn_client_vpn_IcegateVpnService_create(
         mut env: JNIEnv,
         _: JClass,
         config: JString,
@@ -251,9 +251,7 @@ pub mod android {
         };
         // Create and initialize the singleton instance
         // Initialize directly without JNI frame
-        match futures::executor::block_on(
-            async { MobileDeviceManager::initialize(&config_str, fd as i32).await }
-        ) {
+        match futures::executor::block_on(async { MobileDeviceManager::initialize(&config_str, fd as i32).await }) {
             Ok(_) => 1, // Return non-zero to indicate success
             Err(e) => {
                 error!("Failed to initialize VPN: {}", e);
@@ -263,7 +261,7 @@ pub mod android {
     }
 
     #[no_mangle]
-    pub extern "system" fn Java_com_icegatevpn_client_service_ShadowsocksVPN_start(
+    pub extern "system" fn Java_com_icegatevpn_client_vpn_IcegateVpnService_start(
         _: JNIEnv,
         _: JClass,
         _: jlong,
@@ -272,26 +270,26 @@ pub mod android {
             Ok(status) => status,
             Err(e) => {
                 error!("Failed to start VPN: {}", e);
-                0
+                -1
             }
         }
     }
 
     #[no_mangle]
-    pub extern "system" fn Java_com_icegatevpn_client_service_ShadowsocksVPN_isRunning(
+    pub extern "system" fn Java_com_icegatevpn_client_vpn_IcegateVpnService_checkStatus(
         _env: JNIEnv,
         _: JClass,
         _ptr: jlong,
-    ) -> jboolean {
+    ) -> jlong {
         debug!("Shadowsocks VPN check isRunning");
         match futures::executor::block_on(async { MobileDeviceManager::get_status().await }) {
-            Ok(s) => (s.code.tou8() > 0 && s.code.tou8() < 3) as jboolean,
-            Err(_) => false as jboolean,
+            Ok(status) => status.code.tou8() as i64,
+            Err(_) => -1,
         }
     }
 
     #[no_mangle]
-    pub extern "system" fn Java_com_icegatevpn_client_service_ShadowsocksVPN_stop(
+    pub extern "system" fn Java_com_icegatevpn_client_vpn_IcegateVpnService_stop(
         _: JNIEnv,
         _: JClass,
         _: jlong,
