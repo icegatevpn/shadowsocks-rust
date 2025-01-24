@@ -222,18 +222,31 @@ pub extern "C" fn vpn_destroy(context: *mut VpnContext) {
 
 #[cfg(target_os = "android")]
 pub mod android {
+    use std::str::FromStr;
     use super::*;
     use jni::objects::{JClass, JString};
     use jni::sys::{jboolean, jint, jlong};
     use jni::JNIEnv;
-    use log::{debug, error, LevelFilter};
+    use log::{debug, error, info, LevelFilter};
 
-    pub fn init_logging() {
+    pub fn init_logging(level: Option<LevelFilter>) {
+        let level = level.unwrap_or_else(|| LevelFilter::Debug);
+
         android_logger::init_once(
             android_logger::Config::default()
-                .with_max_level(LevelFilter::Debug)
+                .with_max_level(level)
                 .with_tag("ShadowsocksVPN"),
         );
+    }
+
+    use serde_json::Value;
+    fn get_log_lvl(config: &String) -> LevelFilter {
+        let v: Value = match serde_json::from_str(config) {
+            Ok(v) => v,
+            Err(_) => return LevelFilter::Debug,
+        };
+        LevelFilter::from_str(v["rust_log_lvl"].as_str().unwrap_or("Debug"))
+            .unwrap_or(LevelFilter::Debug)
     }
 
     #[no_mangle]
@@ -243,7 +256,12 @@ pub mod android {
         config: JString,
         fd: jint,
     ) -> jlong {
-        init_logging();
+        let config_str: String = match env.get_string(&config) {
+            Ok(s) => s.into(),
+            Err(_) => "".into(),
+        };
+        let lvl_filter = get_log_lvl(&config_str);
+        init_logging(Some(lvl_filter));
 
         let config_str: String = match env.get_string(&config) {
             Ok(s) => s.into(),
