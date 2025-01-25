@@ -510,7 +510,9 @@ pub async fn run_web_service(
         .await
         .expect(&format!("Failed to bind to {}", host_name));
 
-    info!("Web service listening on http://{}/{}", host_name, url_key);
+    let msg = format!("Web service listening on http://{}/{}", host_name, url_key);
+    println!("{}",msg);
+    info!("{}", msg);
 
     axum::serve(listener, app).await.expect("Web service failed");
 }

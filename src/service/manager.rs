@@ -305,7 +305,13 @@ fn create_default_database() -> Database {
 
 pub fn set_url_key(config: &mut Config, url_key: Option<String>, database: &Database) {
     config.url_key = match url_key {
-        Some(k) => Some(String::from(k)),
+        Some(k) => {
+            if k.is_empty() {
+                Some(Config::generate_manager_key().expect("Failed to generate URL key!"))
+            } else {
+                Some(String::from(k))
+            }
+        },
         None => {
             database.get_url_key()
                 .unwrap_or(Some(Config::generate_manager_key().expect("Failed to generate URL key!")))
