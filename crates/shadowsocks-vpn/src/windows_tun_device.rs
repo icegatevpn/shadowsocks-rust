@@ -1,20 +1,16 @@
-use std::io;
 use log::{debug, error, info, warn};
+use serde::{Deserialize, Serialize};
 use shadowsocks::config::Mode;
+use shadowsocks::ServerAddr;
+use shadowsocks_service::config::ProtocolType;
 use shadowsocks_service::{
     config::Config,
-    local::{
-        context::ServiceContext,
-        loadbalancing::PingBalancerBuilder,
-        tun::TunBuilder,
-    },
+    local::{context::ServiceContext, loadbalancing::PingBalancerBuilder, tun::TunBuilder},
 };
+use std::io;
 use std::process::Command;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use serde::{Deserialize, Serialize};
-use shadowsocks::ServerAddr;
-use shadowsocks_service::config::ProtocolType;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct RouteState {
@@ -27,6 +23,7 @@ pub struct WindowsTunDevice {
     tun_interface: Option<String>,
     running: Arc<Mutex<bool>>,
     original_state: Arc<Mutex<Option<RouteState>>>,
+    tun_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 
 impl WindowsTunDevice {
@@ -34,16 +31,15 @@ impl WindowsTunDevice {
         Ok(WindowsTunDevice {
             config,
             tun_interface: None,
-            running: Arc::new(Mutex::new(false)),
-            original_state: Arc::new(Mutex::new(None)),
+            running: Arc::default(),
+            original_state: Arc::default(),
+            tun_task: Mutex::default(),
         })
     }
 
     async fn save_route_state(&self) -> io::Result<RouteState> {
         // Get current default gateway
-        let output = Command::new("route")
-            .args(["print", "0.0.0.0"])
-            .output()?;
+        let output = Command::new("route").args(["print", "0.0.0.0"]).output()?;
 
         let output_str = String::from_utf8_lossy(&output.stdout);
         let mut default_gateway = String::new();
@@ -82,7 +78,7 @@ impl WindowsTunDevice {
         let output = Command::new("powershell")
             .args([
                 "-Command",
-                "Get-NetAdapter | ForEach-Object { Disable-NetAdapterBinding -Name $_.Name -ComponentID 'ms_tcpip6' }"
+                "Get-NetAdapter | ForEach-Object { Disable-NetAdapterBinding -Name $_.Name -ComponentID 'ms_tcpip6' }",
             ])
             .output()?;
 
@@ -95,24 +91,11 @@ impl WindowsTunDevice {
 
         // Disable IPv6 transition technologies
         let _ = Command::new("netsh")
-            .args([
-                "interface",
-                "ipv6",
-                "set",
-                "teredo",
-                "disabled"
-            ])
+            .args(["interface", "ipv6", "set", "teredo", "disabled"])
             .output()?;
 
         let _ = Command::new("netsh")
-            .args([
-                "interface",
-                "ipv6",
-                "set",
-                "interface",
-                "*",
-                "routerdiscovery=disabled"
-            ])
+            .args(["interface", "ipv6", "set", "interface", "*", "routerdiscovery=disabled"])
             .output()?;
 
         // Set IPv6 preference to IPv4
@@ -125,8 +108,8 @@ impl WindowsTunDevice {
                 "/t",
                 "REG_DWORD",
                 "/d",
-                "0xFF",  // Disable all IPv6 components
-                "/f"
+                "0xFF", // Disable all IPv6 components
+                "/f",
             ])
             .output()?;
 
@@ -166,24 +149,25 @@ impl WindowsTunDevice {
                 }
             };
 
-            debug!("Adding route for VPN server {} via {}", server_addr, state.default_gateway);
+            debug!(
+                "Adding route for VPN server {} via {}",
+                server_addr, state.default_gateway
+            );
 
             // Delete any existing routes for VPN server
-            let _ = Command::new("route")
-                .args(["delete", &server_addr])
-                .output()?;
+            let _ = Command::new("route").args(["delete", &server_addr]).output()?;
 
             // Add route for VPN server
             let output = Command::new("route")
                 .args([
-                    "-p",  // Make route persistent
+                    "-p", // Make route persistent
                     "add",
                     &server_addr,
                     "mask",
                     "255.255.255.255",
                     &state.default_gateway,
                     "metric",
-                    "1"
+                    "1",
                 ])
                 .output()?;
 
@@ -205,14 +189,14 @@ impl WindowsTunDevice {
         debug!("Adding new default route via TUN interface");
         let output = Command::new("route")
             .args([
-                "-p",  // Make route persistent
+                "-p", // Make route persistent
                 "add",
                 "0.0.0.0",
                 "mask",
                 "0.0.0.0",
-                "10.10.0.1",  // TUN interface IP
+                "10.10.0.1", // TUN interface IP
                 "metric",
-                "1"
+                "1",
             ])
             .output()?;
 
@@ -221,16 +205,11 @@ impl WindowsTunDevice {
                 "Failed to add default route: {}",
                 String::from_utf8_lossy(&output.stderr)
             );
-            return Err(io::Error::new(
-                io::ErrorKind::Other,
-                "Failed to add default route"
-            ));
+            return Err(io::Error::new(io::ErrorKind::Other, "Failed to add default route"));
         }
 
         // Verify the routing configuration
-        let output = Command::new("route")
-            .arg("print")
-            .output()?;
+        let output = Command::new("route").arg("print").output()?;
         debug!("Final routing table:\n{}", String::from_utf8_lossy(&output.stdout));
 
         Ok(())
@@ -254,7 +233,7 @@ impl WindowsTunDevice {
                 "0.0.0.0",
                 &state.default_gateway,
                 "metric",
-                &state.interface_metric.to_string()
+                &state.interface_metric.to_string(),
             ])
             .output()?;
 
@@ -283,9 +262,7 @@ impl WindowsTunDevice {
                 }
             };
 
-            let _ = Command::new("route")
-                .args(["delete", &server_addr])
-                .output()?;
+            let _ = Command::new("route").args(["delete", &server_addr]).output()?;
         }
 
         Ok(())
@@ -298,7 +275,7 @@ impl WindowsTunDevice {
         let output = Command::new("powershell")
             .args([
                 "-Command",
-                "Get-NetAdapter | ForEach-Object { Enable-NetAdapterBinding -Name $_.Name -ComponentID 'ms_tcpip6' }"
+                "Get-NetAdapter | ForEach-Object { Enable-NetAdapterBinding -Name $_.Name -ComponentID 'ms_tcpip6' }",
             ])
             .output()?;
 
@@ -320,7 +297,7 @@ impl WindowsTunDevice {
                 "REG_DWORD",
                 "/d",
                 "0x0",
-                "/f"
+                "/f",
             ])
             .output()?;
 
@@ -334,7 +311,6 @@ impl WindowsTunDevice {
         Ok(())
     }
 
-
     pub async fn start(&mut self) -> io::Result<()> {
         if self.is_running().await {
             warn!("TUN device already running");
@@ -342,12 +318,12 @@ impl WindowsTunDevice {
         }
 
         // Get the TUN configuration from the locals
-        let tun_config = self.config.local.iter()
+        let tun_config = self
+            .config
+            .local
+            .iter()
             .find(|local| local.config.protocol == ProtocolType::Tun)
-            .ok_or_else(|| io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "No TUN configuration found in config"
-            ))?;
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "No TUN configuration found in config"))?;
 
         // Create shadowsocks context and balancer
         let context = Arc::new(ServiceContext::new());
@@ -388,7 +364,6 @@ impl WindowsTunDevice {
             // Disable IPv6
             self.disable_ipv6_bindings().await?;
 
-
             // Configure routing
             self.configure_routing(&name).await?;
         }
@@ -396,12 +371,13 @@ impl WindowsTunDevice {
         *self.running.lock().await = true;
 
         // Run the TUN device
-        tokio::spawn(async move {
+        let task = tokio::spawn(async move {
             if let Err(e) = tun.run().await {
                 error!("TUN device error: {}", e);
             }
+            println!("tun finish");
         });
-
+        *self.tun_task.lock().await = Some(task);
         Ok(())
     }
 
@@ -409,7 +385,9 @@ impl WindowsTunDevice {
         if !self.is_running().await {
             return Ok(());
         }
-
+        if let Some(task) = self.tun_task.lock().await.as_ref() {
+            task.abort();
+        }
         if let Some(state) = self.original_state.lock().await.as_ref() {
             // Restore routing first
             self.restore_routing(state).await?;
