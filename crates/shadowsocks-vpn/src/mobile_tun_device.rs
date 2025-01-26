@@ -1,18 +1,38 @@
+use futures::executor::block_on;
+use ipnet::IpNet;
 use log::{debug, error, info};
 use shadowsocks::config::Mode;
 use shadowsocks_service::config::Config;
 use shadowsocks_service::local::context::ServiceContext;
-use shadowsocks_service::local::loadbalancing::{PingBalancerBuilder};
+use shadowsocks_service::local::loadbalancing::PingBalancerBuilder;
 use shadowsocks_service::local::tun::{StaticDeviceNetHelper, TunBuilder};
-use std::{io, sync::Arc};
 use std::fmt::Debug;
-use tokio::sync::Mutex;
-use ipnet::IpNet;
-use futures::executor::block_on;
+use std::{io, sync::Arc};
+use tokio::sync::{mpsc, Mutex};
+use tokio::sync::mpsc::error::SendError;
+use shadowsocks::relay::udprelay::DatagramReceiveExt;
+use crate::mobile_tun_device::TunError::{DeviceError, IoError};
+/*
+
+// Tunnel represents a session on a TUN device.
+type Tunnel interface {
+    // IsConnected is true if Disconnect has not been called.
+    IsConnected() bool
+    // Disconnect closes the underlying resources. Subsequent Write calls will fail.
+    Disconnect()
+    // Write writes input data to the TUN interface.
+    Write(data []byte) (int, error)
+}
+
+Then the Swift code will create a tunnel, pass packets to it, and destroy the tunnel.
+
+
+ */
 
 #[derive(Debug)]
 pub enum TunError {
     IoError(io::Error),
+    SendError(SendError<Vec<u8>>),
     ConfigError(&'static str),
     DeviceError(&'static str),
 }
@@ -74,7 +94,6 @@ impl Debug for TunDeviceConfig {
             .field("fd", &self.fd)
             .field("mtu", &self.mtu)
             .finish()
-
     }
 }
 #[derive(Clone)]
@@ -82,6 +101,8 @@ pub struct MobileTunDevice {
     // Store the builder until we're ready to build
     device: Arc<Mutex<Option<TunBuilder>>>,
     pub status: Arc<Mutex<VPNStatus>>,
+    sender: mpsc::UnboundedSender<Vec<u8>>,
+    receiver: Arc<Mutex<mpsc::UnboundedReceiver<Vec<u8>>>>,
 }
 
 impl MobileTunDevice {
@@ -98,10 +119,7 @@ impl MobileTunDevice {
 
         // Create a TunBuilder using the existing shadowsocks implementation
         let context = Arc::new(ServiceContext::new());
-        let mut balancer_builder = PingBalancerBuilder::new(
-            context.clone(),
-            Mode::TcpAndUdp,
-        );
+        let mut balancer_builder = PingBalancerBuilder::new(context.clone(), Mode::TcpAndUdp);
 
         // Add servers from config
         for server in &config.server {
@@ -121,60 +139,83 @@ impl MobileTunDevice {
             builder.destination(dest);
         }
         // Create the network helper with the configured addresses
-        let net_helper = StaticDeviceNetHelper::new(
-            tun_config.address.addr(),
-            tun_config.address.netmask()
-        );
+        let net_helper = StaticDeviceNetHelper::new(tun_config.address.addr(), tun_config.address.netmask());
         builder.with_net_helper(net_helper);
-
         builder.mode(Mode::TcpAndUdp);
         builder.name("shadowsocks-rust-tun-device");
-
+        let (s, r) = mpsc::unbounded_channel();
         Ok(MobileTunDevice {
             device: Arc::new(Mutex::new(Some(builder))),
             status: Arc::new(Mutex::new(VPNStatus::new(VPNStatusCode::Started, None))),
+            sender: s,
+            receiver: Arc::new(Mutex::new(r)),
         })
+    }
+
+    pub fn write(&self, buf: &[u8]) -> Result<usize, TunError> {
+        match self.sender.send(Vec::from(buf)) {
+            Ok(_) => Ok(buf.len()),
+            Err(e) => Err(TunError::SendError(e))
+        }
     }
 
     pub async fn start_tunnel(&self) -> Result<(), TunError> {
         info!("Starting TUN tunnel");
         self.update_status(VPNStatus::connecting()).await;
-
-        let mut device_lock = self.device.lock().await;
+        let mut builder_lock = self.device.lock().await;
 
         // Take the builder out of the Option
-        if let Some(builder) = device_lock.take() {
-            let tun = builder.build().await.map_err( |e|  {
-                error!("Failed to build TUN device: {:?}", e);
-                block_on(async move {
-                    self.update_status(VPNStatus::error(&format!("Failed to build TUN device: {:?}", e))).await;
-                });
-                TunError::DeviceError("Failed to create TUN device")
-            }).expect("Failed to build TUN device");
+        let builder = builder_lock.take().ok_or_else(|| {
+            let err = DeviceError("TUN device already started");
+            block_on(async {
+                self.update_status(VPNStatus::error("TUN device already started")).await;
+            });
+            err
+        })?;
 
-            // Release the lock before running
-            drop(device_lock);
+        // Build the TUN device
+        let mut tun = builder.build().await.map_err(|e| {
+            error!("Failed to build TUN device: {:?}", e);
+            block_on(async {
+                self.update_status(VPNStatus::error(&format!(
+                    "Failed to build TUN device: {:?}",
+                    e
+                ))).await;
+            });
+           DeviceError("Failed to create TUN device")
+        })?;
+        // Release the lock before running
+        drop(builder_lock);
 
-            self.update_status(VPNStatus::connected()).await;
-
-            // Run the TUN device
-            match tun.run().await {
-                Ok(_) => {
-                    let status = VPNStatus::disconnected();
-                    self.update_status(status.clone()).await;
-                    Ok(())
-                }
-                Err(e) => {
-                    let status = VPNStatus::error(&format!("Failed to run TUN device: {:?}", e));
-                    self.update_status(status.clone()).await;
-                    Err(TunError::IoError(e))
-
+        // Create the handler and get receivers
+        let mtu = 1500; // Standard MTU size
+        let mut packet_rx = self.receiver.lock().await;
+        self.update_status(VPNStatus::connected()).await;
+        let handler = tun.create_handle(mtu).expect("Failed to create TUN handle");
+        let process_tun_writes = async move {
+            loop {
+                if let Some(packet) = packet_rx.recv().await {
+                    if let Err(e) = handler.write_packet(packet.into()).await {
+                        error!("Failed to write packet to TUN device: {:?}", e);
+                    }
                 }
             }
-        } else {
-            let status = VPNStatus::error("TUN device already started");
-            self.update_status(status.clone()).await;
-            Err(TunError::DeviceError("TUN device already started"))
+        };
+
+        let result = tokio::select! {
+            r = tun.run() => r,
+            _ = process_tun_writes => Ok(()),
+        };
+        match result {
+            Ok(_) => {
+                self.update_status(VPNStatus::disconnected()).await;
+                Ok(())
+            }
+            Err(e) => {
+                let status = VPNStatus::error(&format!("TUN device error: {:?}", e));
+                self.update_status(status).await;
+                Err(IoError(e))
+            }
         }
     }
 }

@@ -8,9 +8,14 @@ use std::{
     sync::Arc,
     time::Duration,
 };
-
+use std::ops::Deref;
+use std::os::fd::AsRawFd;
+use tokio::sync::Mutex;
+use std::sync::Weak;
 use byte_string::ByteStr;
+use bytes::Bytes;
 use cfg_if::cfg_if;
+use futures::executor::block_on;
 use ipnet::IpNet;
 use log::{debug, error, info, trace, warn};
 use shadowsocks::config::Mode;
@@ -165,43 +170,91 @@ impl TunBuilder {
         debug!("..... 2");
         let tcp = TcpTun::new(self.context, self.balancer, device.mtu().unwrap_or(1500) as u32);
         debug!("..... 3");
+        let arc_device = Arc::new(Mutex::new(device));
+
         Ok(Tun {
-            device,
+            device: arc_device,
             tcp,
             udp,
             udp_cleanup_interval,
             udp_keepalive_rx,
             mode: self.mode,
             net_helper: self.net_helper,
+            receiver_from_handle: None,
         })
+    }
+}
+
+pub struct TunDeviceHandle {
+    device: Weak<Mutex<AsyncDevice>>,
+    packet_tx: mpsc::Sender<Bytes>,
+}
+impl TunDeviceHandle {
+    pub async fn write_packet(&self, packet: Bytes) -> io::Result<usize> {
+        // Try to send through the channel first for integration with the event loop
+        if let Ok(_) = self.packet_tx.send(packet.clone()).await {
+            return Ok(packet.len());
+        }
+
+        // Fallback to direct write if channel is closed
+        if let Some(device) = self.device.upgrade() {
+            let mut device = device.lock().await;
+            device.write(&packet).await
+        } else {
+            Err(io::Error::new(io::ErrorKind::NotConnected, "TUN device no longer available"))
+        }
+    }
+
+    pub async fn read_packet(&self, buf: &mut [u8]) -> io::Result<usize> {
+        if let Some(device) = self.device.upgrade() {
+            let mut device = device.lock().await;
+            device.read(buf).await
+        } else {
+            Err(io::Error::new(io::ErrorKind::NotConnected, "TUN device no longer available"))
+        }
     }
 }
 
 /// Tun service
 pub struct Tun {
-    device: AsyncDevice,
+    device: Arc<Mutex<AsyncDevice>>,
     net_helper: Option<Arc<dyn DeviceNetHelper>>,
     tcp: TcpTun,
     udp: UdpTun,
     udp_cleanup_interval: Duration,
     udp_keepalive_rx: mpsc::Receiver<SocketAddr>,
     mode: Mode,
+    receiver_from_handle: Option<mpsc::Receiver<Bytes>> // Receiver to the TunDeviceHandle
 }
 
 impl Tun {
     /// Start serving
     pub fn interface_name(&self) -> io::Result<String> {
-        self.device.tun_name().map_err(From::from)
+        block_on(async move {
+            let lock = self.device.lock().await;
+            lock.tun_name()
+        }).map_err(From::from)
+    }
+
+    pub fn create_handle(&mut self, buffer_size: usize) -> io::Result<TunDeviceHandle> {
+        let (packet_tx, packet_rx) = mpsc::channel(buffer_size);
+        // Replace the existing packet_rx with the new one
+        self.receiver_from_handle = Some(packet_rx);
+
+        Ok(TunDeviceHandle {
+            device: Arc::downgrade(&self.device),
+            packet_tx,
+        })
     }
 
     pub async fn run(mut self) -> io::Result<()> {
         info!(
             "shadowsocks tun device {}, mode {}",
-            self.device.tun_name().or_else(|r| Ok::<_, ()>(r.to_string())).unwrap(),
+            self.interface_name().or_else(|r| Ok::<_, ()>(r.to_string())).unwrap(),
             self.mode,
         );
 
-        let address = match self.device.address() {
+        let address = match self.device.lock().await.address() {
             Ok(a) => a,
             Err(err) => {
                 if let Some(helper) = &self.net_helper {
@@ -213,7 +266,7 @@ impl Tun {
             }
         };
 
-        let netmask = match self.device.netmask() {
+        let netmask = match self.device.lock().await.netmask() {
             Ok(n) => n,
             Err(err) => {
                 if let Some(helper) = &self.net_helper {
@@ -247,10 +300,28 @@ impl Tun {
 
         loop {
             tokio::select! {
-                // tun device
-                n = self.device.read(&mut packet_buffer) => {
-                    let n = n?;
+                // Handle packets from external writers through TunDeviceHandle
+                rx = async {
+                    match &mut self.receiver_from_handle {
+                        Some(rx) => rx.recv().await,
+                        None => std::future::pending().await
+                    }
+                } => {
+                    if let Some(packet) = rx {
+                        trace!("received packet from external writer");
+                        let mut device = self.device.lock().await;
+                        if let Err(err) = device.write(&packet).await {
+                            error!("failed to write packet from external source: {}", err);
+                        }
+                    }
+                }
 
+                // tun device
+                read_result = async {
+                    let mut device = self.device.lock().await;
+                    device.read(&mut packet_buffer).await
+                } => {
+                    let n = read_result?;
                     let packet = &mut packet_buffer[..n];
                     trace!("[TUN] received IP packet {:?}", ByteStr::new(packet));
 
@@ -261,7 +332,8 @@ impl Tun {
 
                 // UDP channel sent back
                 packet = self.udp.recv_packet() => {
-                    match self.device.write(&packet).await {
+                    let mut device = self.device.lock().await;
+                    match device.write(&packet).await {
                         Ok(n) => {
                             if n < packet.len() {
                                 warn!("[TUN] sent IP packet (UDP), but truncated. sent {} < {}, {:?}",
@@ -271,8 +343,7 @@ impl Tun {
                             }
                         }
                         Err(err) => {
-                            error!("[TUN] failed to write packet, error: {}, {:?}",
-                                  err, ByteStr::new(&packet));
+                            error!("failed to write packet, error: {}", err);
                         }
                     }
                 }
@@ -290,7 +361,8 @@ impl Tun {
 
                 // TCP channel sent back
                 packet = self.tcp.recv_packet() => {
-                    match self.device.write(&packet).await {
+                    let mut device = self.device.lock().await;
+                    match device.write(&packet).await {
                         Ok(n) => {
                             if n < packet.len() {
                                 warn!("[TUN] sent IP packet (TCP), but truncated. sent {} < {}, {:?}",
@@ -300,8 +372,7 @@ impl Tun {
                             }
                         }
                         Err(err) => {
-                            error!("[TUN] failed to write packet, error: {}, {:?}",
-                                  err, ByteStr::new(&packet));
+                            error!("failed to write packet, error: {}", err);
                         }
                     }
                 }

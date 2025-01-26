@@ -1048,3 +1048,21 @@ THE SOFTWARE.
 ## Stargazers over time
 
 [![Stargazers over time](https://starchart.cc/shadowsocks/shadowsocks-rust.svg)](https://starchart.cc/shadowsocks/shadowsocks-rust)
+
+
+## New SSManager Service
+Copy ssmanager.service to /etc/systemd/system/ssmanager.service
+
+Setup service config and log4rs.yaml
+
+# Enable and start service
+sudo systemctl daemon-reload
+sudo systemctl enable ssmanager
+sudo systemctl start ssmanager
+
+# Check status
+sudo systemctl status ssmanager
+tail -f /home/ssmanager/log/ssmanager.log
+
+# Stop
+sudo systemctl stop ssmanager
