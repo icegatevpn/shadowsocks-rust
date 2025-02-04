@@ -413,10 +413,6 @@ impl Database {
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_servers_ip_port ON servers(ip_address, port)",
             [],
         )?;
-        tx.execute(
-            "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_name_server ON users(name, server_port)",
-            [],
-        )?;
         tx.commit()?;
         Ok(())
     }
@@ -1042,19 +1038,6 @@ impl Database {
         }
 
         let tx = self.conn.transaction()?;
-
-        // Verify name and port combination is unique
-        let name_exists: bool = tx.query_row(
-            "SELECT EXISTS(SELECT 1 FROM users WHERE name = ? AND server_port = ?)",
-            params![name, server_port],
-            |row| row.get(0),
-        )?;
-
-        if name_exists {
-            return Err(Error::InvalidParameterName(
-                "User name already exists for this server".into(),
-            ));
-        }
 
         // Get current timestamp
         let now = Utc::now().naive_utc();
