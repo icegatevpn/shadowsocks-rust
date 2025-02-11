@@ -476,17 +476,23 @@ impl Database {
 
             // Add the server
             tx.execute(
-                "INSERT OR REPLACE INTO servers (
-                    ip_address, port, method, mode, key, active
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                "INSERT INTO servers (
+                ip_address, port, method, mode, key, active
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+            ON CONFLICT(port) DO UPDATE SET
+                ip_address=?1,
+                method=?3,
+                mode=?4,
+                key=?5,
+                active=?6",
                 params![
-                    ip_address,
-                    port,
-                    server.method().to_string(),
-                    server.mode().to_string(),
-                    server.password().to_string(),
-                    true, // Active by default
-                ],
+                ip_address,
+                port as u32,
+                server.method().to_string(),
+                server.mode().to_string(),
+                server.password().to_string(),
+                true, // Active by default
+            ],
             )?;
 
             // Handle users if present
@@ -1156,7 +1162,8 @@ impl Database {
 #[cfg(test)]
 mod tests {
     use base64::Engine;
-    use super::*;
+    use base64::engine::general_purpose::URL_SAFE;
+    use super::Config;
 
     #[test]
     fn test_generate_manager_key() {
