@@ -58,6 +58,15 @@ impl Context {
             _ => self.replay_protector.check_nonce_and_set(method, nonce),
         }
     }
+    fn gen_printable_prefix(nonce: &mut [u8]) {
+        // TLS ClientHello: "\u0016\u0003\u0001\u0000\u00a8\u0001\u0001"
+        const SECURITY_PRINTABLE_PREFIX_LEN: usize = 8;
+        let prefix: &[u8] = b"%16%03%01%00%C2%A8%01%01";
+
+        if nonce.len() >= SECURITY_PRINTABLE_PREFIX_LEN {
+            nonce[..SECURITY_PRINTABLE_PREFIX_LEN].copy_from_slice(&prefix[..SECURITY_PRINTABLE_PREFIX_LEN]);
+        }
+    }
 
     /// Generate nonce (IV or SALT)
     pub fn generate_nonce(&self, method: CipherKind, nonce: &mut [u8], unique: bool) {
@@ -70,6 +79,8 @@ impl Context {
             use crate::crypto::utils::random_iv_or_salt;
 
             random_iv_or_salt(nonce);
+            // generate printable prefix
+            Self::gen_printable_prefix(nonce);
 
             // Salt already exists, generate a new one.
             if unique && self.check_nonce_and_set(method, nonce) {

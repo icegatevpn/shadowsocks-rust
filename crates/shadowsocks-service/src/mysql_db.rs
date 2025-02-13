@@ -413,10 +413,6 @@ impl Database {
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_servers_ip_port ON servers(ip_address, port)",
             [],
         )?;
-        tx.execute(
-            "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_name_server ON users(name, server_port)",
-            [],
-        )?;
         tx.commit()?;
         Ok(())
     }
@@ -480,17 +476,23 @@ impl Database {
 
             // Add the server
             tx.execute(
-                "INSERT OR REPLACE INTO servers (
-                    ip_address, port, method, mode, key, active
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                "INSERT INTO servers (
+                ip_address, port, method, mode, key, active
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+            ON CONFLICT(port) DO UPDATE SET
+                ip_address=?1,
+                method=?3,
+                mode=?4,
+                key=?5,
+                active=?6",
                 params![
-                    ip_address,
-                    port,
-                    server.method().to_string(),
-                    server.mode().to_string(),
-                    server.password().to_string(),
-                    true, // Active by default
-                ],
+                ip_address,
+                port as u32,
+                server.method().to_string(),
+                server.mode().to_string(),
+                server.password().to_string(),
+                true, // Active by default
+            ],
             )?;
 
             // Handle users if present
@@ -1043,19 +1045,6 @@ impl Database {
 
         let tx = self.conn.transaction()?;
 
-        // Verify name and port combination is unique
-        let name_exists: bool = tx.query_row(
-            "SELECT EXISTS(SELECT 1 FROM users WHERE name = ? AND server_port = ?)",
-            params![name, server_port],
-            |row| row.get(0),
-        )?;
-
-        if name_exists {
-            return Err(Error::InvalidParameterName(
-                "User name already exists for this server".into(),
-            ));
-        }
-
         // Get current timestamp
         let now = Utc::now().naive_utc();
 
@@ -1173,7 +1162,8 @@ impl Database {
 #[cfg(test)]
 mod tests {
     use base64::Engine;
-    use super::*;
+    use base64::engine::general_purpose::URL_SAFE;
+    use super::Config;
 
     #[test]
     fn test_generate_manager_key() {
