@@ -1,9 +1,9 @@
 /*
     This is very much only for development and testing. the shadowsocks-vpn is a library, not a binary.
  */
+#[cfg(target_os = "macos")]
 mod macos_tun_device;
 
-mod ios_tun_device;
 #[cfg(target_os = "windows")]
 mod windows_tun_device;
 
@@ -36,99 +36,99 @@ use std::{thread};
 use std::io::ErrorKind;
 use std::sync::{Arc, Condvar, Mutex};
 use ipnet::IpNet;
-#[cfg(not(target_os = "android"))]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 use shadowsocks_vpn::{vpn_create, vpn_destroy, vpn_last_error, vpn_start, vpn_stop};
-use crate::ios_tun_device::{IosMacTunConfig, IosMacTunDevice};
 
-#[tokio::main]
-async fn main() -> io::Result<()> {
-    // Initialize logging
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("debug")).init();
+//
+// #[tokio::main]
+// async fn main() -> io::Result<()> {
+//     // Initialize logging
+//     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("debug")).init();
+//
+//     // Example shadowsocks configuration
+//     let config = Config::load_from_str(
+//         r#"{
+//             "server": "46.249.38.167",
+//             "server_port": 8488,
+//             "password": "yJxlMnbXB0fpbQ+YfBwmV4GVr1ndRbsEJXdrJFQNeRE=:aj0Wg39ZA/h6dUuZr60T3kMHRpQQDIivPeSOYi397C4=",
+//             "method": "2022-blake3-aes-256-gcm",
+//             "mode": "tcp_and_udp",
+//             "locals": [
+//                 {
+//                     "protocol": "tun",
+//                     "local_address": "10.10.0.2",
+//                     "local_port": 1086,
+//                     "mode": "tcp_and_udp"
+//                 }
+//             ],
+//             "dns": "8.8.8.8,8.8.4.4",
+//             "no_delay": true,
+//             "keep_alive": 15,
+//             "timeout": 300
+//         }"#,
+//         ConfigType::Local
+//     ).expect("Failed to parse config");
+//
+//     // TUN device configuration
+//     let tun_config = IosMacTunConfig {
+//         address: "10.10.0.2/24".parse::<IpNet>().expect("Invalid address"),
+//         destination: Some("0.0.0.0/0".parse::<IpNet>().expect("Invalid destination")),
+//         mtu: Some(1500),
+//     };
+//
+//     // Create the TUN device
+//     let tun_device = IosMacTunDevice::new(tun_config, config)
+//         .await
+//         .expect("Failed to create TUN device");
+//
+//     // Get adapter for writing test data if needed
+//     let adapter = tun_device.get_adapter();
+//
+//     // Spawn a task to read outbound packets
+//     let tun_clone = tun_device.clone();
+//     tokio::spawn(async move {
+//         loop {
+//             match tun_clone.read_outbound().await {
+//                 Ok(data) => {
+//                     debug!("Received outbound packet: {} bytes", data.len());
+//                 },
+//                 Err(e) => {
+//                     error!("Error reading outbound packet: {}", e);
+//                     break;
+//                 }
+//             }
+//         }
+//     });
+//
+//     // Start the tunnel
+//     info!("Starting TUN device...");
+//
+//     // Handle shutdown gracefully
+//     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+//
+//     // Spawn the tunnel in a separate task
+//     let tun_handle = tokio::spawn(async move {
+//         if let Err(e) = tun_device.start_tunnel().await {
+//             error!("Tunnel error: {}", e);
+//         }
+//     });
+//
+//     // Wait for Ctrl-C
+//     tokio::select! {
+//         _ = signal::ctrl_c() => {
+//             info!("Received Ctrl+C, shutting down...");
+//             let _ = shutdown_tx.send(());
+//         }
+//         _ = tun_handle => {
+//             error!("Tunnel stopped unexpectedly");
+//         }
+//     }
+//
+//     info!("Shutdown complete");
+//     Ok(())
+// }
 
-    // Example shadowsocks configuration
-    let config = Config::load_from_str(
-        r#"{
-            "server": "46.249.38.167",
-            "server_port": 8488,
-            "password": "yJxlMnbXB0fpbQ+YfBwmV4GVr1ndRbsEJXdrJFQNeRE=:aj0Wg39ZA/h6dUuZr60T3kMHRpQQDIivPeSOYi397C4=",
-            "method": "2022-blake3-aes-256-gcm",
-            "mode": "tcp_and_udp",
-            "locals": [
-                {
-                    "protocol": "tun",
-                    "local_address": "10.10.0.2",
-                    "local_port": 1086,
-                    "mode": "tcp_and_udp"
-                }
-            ],
-            "dns": "8.8.8.8,8.8.4.4",
-            "no_delay": true,
-            "keep_alive": 15,
-            "timeout": 300
-        }"#,
-        ConfigType::Local
-    ).expect("Failed to parse config");
-
-    // TUN device configuration
-    let tun_config = IosMacTunConfig {
-        address: "10.10.0.2/24".parse::<IpNet>().expect("Invalid address"),
-        destination: Some("0.0.0.0/0".parse::<IpNet>().expect("Invalid destination")),
-        mtu: Some(1500),
-    };
-
-    // Create the TUN device
-    let tun_device = IosMacTunDevice::new(tun_config, config)
-        .await
-        .expect("Failed to create TUN device");
-
-    // Get adapter for writing test data if needed
-    let adapter = tun_device.get_adapter();
-
-    // Spawn a task to read outbound packets
-    let tun_clone = tun_device.clone();
-    tokio::spawn(async move {
-        loop {
-            match tun_clone.read_outbound().await {
-                Ok(data) => {
-                    debug!("Received outbound packet: {} bytes", data.len());
-                },
-                Err(e) => {
-                    error!("Error reading outbound packet: {}", e);
-                    break;
-                }
-            }
-        }
-    });
-
-    // Start the tunnel
-    info!("Starting TUN device...");
-
-    // Handle shutdown gracefully
-    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
-
-    // Spawn the tunnel in a separate task
-    let tun_handle = tokio::spawn(async move {
-        if let Err(e) = tun_device.start_tunnel().await {
-            error!("Tunnel error: {}", e);
-        }
-    });
-
-    // Wait for Ctrl-C
-    tokio::select! {
-        _ = signal::ctrl_c() => {
-            info!("Received Ctrl+C, shutting down...");
-            let _ = shutdown_tx.send(());
-        }
-        _ = tun_handle => {
-            error!("Tunnel stopped unexpectedly");
-        }
-    }
-
-    info!("Shutdown complete");
-    Ok(())
-}
-
-#[cfg(not(target_os = "android"))]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 fn old_main() -> std::io::Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 

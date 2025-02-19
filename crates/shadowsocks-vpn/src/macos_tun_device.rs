@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use shadowsocks::net::ConnectOpts;
 use shadowsocks::ServerAddr;
 use shadowsocks_service::config::ProtocolType;
-
+#[cfg(target_os = "macos")]
 pub struct MacOSTunDevice {
     config: Config,
     tun_interface: Option<String>,
@@ -25,7 +25,7 @@ pub struct MacOSTunDevice {
     original_routes: Arc<Mutex<Option<String>>>,
 
 }
-
+#[cfg(target_os = "macos")]
 #[derive(Debug, Serialize, Deserialize)]
 struct RouteState {
     default_gateway: String,
@@ -33,6 +33,7 @@ struct RouteState {
     ipv6_routes: Vec<String>,
 }
 
+#[cfg(target_os = "macos")]
 impl MacOSTunDevice {
 
     pub fn new(config: Config) -> io::Result<Self> {
@@ -138,7 +139,8 @@ impl MacOSTunDevice {
         builder.udp_capacity(256);
 
         // Let shadowsocks create and configure the TUN interface
-        let tun = builder.build().await?;
+        let mut tun = builder.build().await?;
+        tun.create_handle(5000).expect("failed to create tun handle");
 
         // Store the interface name for cleanup
         if let Ok(name) = tun.interface_name() {

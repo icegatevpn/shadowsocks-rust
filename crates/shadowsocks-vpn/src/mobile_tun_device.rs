@@ -80,7 +80,8 @@ impl VPNStatus {
     }
 }
 #[derive(Clone)]
-pub struct TunDeviceConfig {
+pub struct
+TunDeviceConfig {
     pub fd: i32,
     pub address: IpNet,
     pub destination: Option<IpNet>,
@@ -99,7 +100,7 @@ impl Debug for TunDeviceConfig {
 #[derive(Clone)]
 pub struct MobileTunDevice {
     // Store the builder until we're ready to build
-    device: Arc<Mutex<Option<TunBuilder>>>,
+    pub device: Arc<Mutex<Option<TunBuilder>>>,
     pub status: Arc<Mutex<VPNStatus>>,
     sender: mpsc::UnboundedSender<Vec<u8>>,
     receiver: Arc<Mutex<mpsc::UnboundedReceiver<Vec<u8>>>>,
@@ -188,23 +189,37 @@ impl MobileTunDevice {
         drop(builder_lock);
 
         // Create the handler and get receivers
-        let mtu = 1500; // Standard MTU size
-        let mut packet_rx = self.receiver.lock().await;
+        // let mtu = 1500; // Standard MTU size
+        let mtu = 65536; // bigger size
+        // let mut packet_rx = self.receiver.lock().await;
         self.update_status(VPNStatus::connected()).await;
-        let handler = tun.create_handle(mtu).expect("Failed to create TUN handle");
-        let process_tun_writes = async move {
-            loop {
-                if let Some(packet) = packet_rx.recv().await {
-                    if let Err(e) = handler.write_packet(packet.into()).await {
-                        error!("Failed to write packet to TUN device: {:?}", e);
-                    }
-                }
-            }
-        };
+        // we can probably remove all this handler stuff.
+        // let handler = tun.create_handle(mtu).expect("Failed to create TUN handle");
+        // let handler_clone = handler.clone();
+        // let process_tun_writes = async move {
+        //     loop {
+        //         if let Some(packet) = packet_rx.recv().await {
+        //             if let Err(e) = handler.write_packet(packet.into()).await {
+        //                 error!("Failed to write packet to TUN device: {:?}", e);
+        //             }
+        //         }
+        //     }
+        // };
+
+        // let process_tun_reads = async move {
+        //     loop {
+        //         let mut buff = vec![0u8; mtu];
+        //         let buffer = buff.as_mut_slice();
+        //         let data = handler_clone.read_packet(buffer)
+        //             .await.expect("failed to read packet from Tun Handler");
+        //         self.sender.send(buffer.to_owned()).expect("failed to send packet to sender");
+        //     }
+        // };
 
         let result = tokio::select! {
             r = tun.run() => r,
-            _ = process_tun_writes => Ok(()),
+            // _ = process_tun_writes => Ok(()),
+            // _ = process_tun_reads => Ok(()),
         };
         match result {
             Ok(_) => {

@@ -154,11 +154,17 @@ impl TunBuilder {
         //     // IFF_NO_PI preventing excessive buffer reallocating
         //     tun_config.packet_information(false);
         // });
-
+        debug!("!! tun config: {:?}", self.tun_config);
         let device = match create_as_async(&self.tun_config) {
             Ok(d) => d,
-            Err(TunError::Io(err)) => return Err(err),
-            Err(err) => return Err(io::Error::new(ErrorKind::Other, err)),
+            Err(TunError::Io(err)) => {
+                error!("TunError::Io: {:?}", err);
+                return Err(err)
+            },
+            Err(err) => {
+                error!("error: {:?}", err);
+                return Err(io::Error::new(ErrorKind::Other, err))
+            },
         };
         debug!("..... 1");
         let (udp, udp_cleanup_interval, udp_keepalive_rx) = UdpTun::new(
@@ -185,6 +191,7 @@ impl TunBuilder {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct TunDeviceHandle {
     device: Weak<Mutex<AsyncDevice>>,
     packet_tx: mpsc::Sender<Bytes>,

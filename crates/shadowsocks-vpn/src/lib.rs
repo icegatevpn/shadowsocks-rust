@@ -17,13 +17,14 @@ fn set_last_error<E: std::fmt::Display>(err: E) {
 
 #[cfg(target_os = "macos")]
 mod macos_tun_device;
-#[cfg(target_os = "android")]
+#[cfg(any(target_os = "android", target_os = "ios"))]
 mod mobile_tun_device;
 #[cfg(target_os = "windows")]
 pub mod windows_tun_device;
 
 #[cfg(target_os = "android")]
 use crate::mobile_singleton::MobileDeviceManager;
+use env_logger::Target;
 #[cfg(not(target_os = "android"))]
 use log::{debug, error, info};
 #[cfg(not(target_os = "android"))]
@@ -33,7 +34,13 @@ use std::{
     ffi::{c_char, CStr, CString},
     sync::Arc,
 };
+use std::ffi::c_longlong;
 use tokio::runtime::Runtime;
+
+#[cfg(any(target_os = "android", target_os = "ios"))]
+use crate::mobile_singleton::MobileDeviceManager;
+#[cfg(any(target_os = "android", target_os = "ios"))]
+use crate::mobile_tun_device::MobileTunDevice;
 
 #[cfg(target_os = "macos")]
 use crate::macos_tun_device::MacOSTunDevice;
@@ -49,13 +56,15 @@ use tokio::task::JoinHandle;
 #[repr(C)]
 pub struct VpnContext {
     runtime: Runtime,
-    #[cfg(target_os = "android")]
+    #[cfg(any(target_os = "android"))]
     device: MobileDeviceManager,
     #[cfg(target_os = "macos")]
     device: MacOSTunDevice,
     #[cfg(target_os = "windows")]
     device: WindowsTunDevice,
     vpn_task: Option<JoinHandle<std::io::Result<()>>>,
+    #[cfg(target_os = "ios")]
+    tun_device: MobileTunDevice,
 }
 
 #[repr(C)]
@@ -80,7 +89,7 @@ pub extern "C" fn vpn_last_error() -> *mut c_char {
 }
 
 #[no_mangle]
-#[cfg(not(target_os = "android"))]
+#[cfg(target_os = "macos")]
 pub extern "C" fn vpn_create(config_json: *const c_char) -> *mut VpnContext {
     if config_json.is_null() {
         return ptr::null_mut();
@@ -135,7 +144,7 @@ pub extern "C" fn vpn_create(config_json: *const c_char) -> *mut VpnContext {
 }
 
 #[no_mangle]
-#[cfg(not(target_os = "android"))]
+#[cfg(target_os = "macos")]
 pub extern "C" fn vpn_start(context: *mut VpnContext) -> bool {
     let context = match unsafe { context.as_mut() } {
         Some(c) => c,
@@ -181,7 +190,7 @@ pub extern "C" fn vpn_start(context: *mut VpnContext) -> bool {
 }
 
 #[no_mangle]
-#[cfg(not(target_os = "android"))]
+#[cfg(any(target_os = "ios", target_os = "macos", target_os = "windows"))]
 pub extern "C" fn vpn_stop(context: *mut VpnContext) -> bool {
     let context = match unsafe { context.as_mut() } {
         Some(c) => c,
@@ -194,13 +203,22 @@ pub extern "C" fn vpn_stop(context: *mut VpnContext) -> bool {
     // Abort any running VPN task
     if let Some(task) = context.vpn_task.take() {
         task.abort();
+        return true;
     }
 
-    // Stop the VPN device
-    match context.runtime.block_on(async {
-        #[cfg(any(target_os = "macos", target_os = "windows"))]
-        context.device.stop().await
-    }) {
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    match context.runtime.block_on(async { context.device.stop().await }) {
+        Ok(_) => true,
+        Err(e) => {
+            let err_msg = format!("Failed to stop VPN: {}", e);
+            error!("{}", err_msg);
+            set_last_error(err_msg);
+            false
+        }
+    }
+
+    #[cfg(any(target_os = "ios", target_os = "android"))]
+    match context.runtime.block_on(async { MobileDeviceManager::stop().await }) {
         Ok(_) => true,
         Err(e) => {
             let err_msg = format!("Failed to stop VPN: {}", e);
@@ -219,15 +237,174 @@ pub extern "C" fn vpn_destroy(context: *mut VpnContext) {
         }
     }
 }
+#[cfg(target_os = "ios")]
+#[no_mangle]
+pub unsafe extern "C" fn create_vpn(
+    config_json: *const c_char,
+    fd: i32
+) -> *mut VpnContext {
+    ios::create_vpn(config_json, fd)
+}
+
+#[cfg(target_os = "ios")]
+#[no_mangle]
+pub unsafe extern "C" fn start_vpn(context: *mut VpnContext) -> c_longlong {
+    ios::start_vpn(context).unwrap_or_else(|e| -1)
+}
+
+#[cfg(target_os = "ios")]
+#[no_mangle]
+pub unsafe extern "C" fn get_status(context: *mut VpnContext) -> c_longlong {
+    ios::get_status(context)
+}
+
+#[no_mangle]
+pub extern "C" fn test_logging() {
+    ios::test_logging()
+}
+
+#[cfg(target_os = "ios")]
+pub mod ios {
+    use crate::mobile_tun_device::{MobileTunDevice, TunDeviceConfig, VPNStatus, VPNStatusCode};
+    use crate::VpnContext;
+    use crate::VpnError;
+    use log::{debug, error, LevelFilter};
+    use shadowsocks::context::Context;
+    use shadowsocks_service::config::{Config, ConfigType};
+    use std::ffi::{c_char, c_longlong, CStr};
+    use std::ptr;
+    use futures::executor::block_on;
+    use oslog::OsLogger;
+    use tokio::runtime::Runtime;
+
+    #[derive(Debug)]
+    pub enum VPNError {
+        NullPointer(String),
+        InvalidUtf8(String),
+    }
+    pub fn test_logging(){
+        init_logging();
+        debug!("test_logging....");
+    }
+
+    fn init_logging() {
+        // Initialize once
+        static INIT: std::sync::Once = std::sync::Once::new();
+
+        INIT.call_once(|| {
+            // Create logger with subsystem and category
+            let logger = OsLogger::new("com.IceGate.vpn")
+                .level_filter(LevelFilter::Trace); // Set minimum log level
+
+            // Set as global logger
+            log::set_boxed_logger(Box::new(logger))
+                .map(|()| log::set_max_level(LevelFilter::Trace))
+                .expect("Failed to initialize logging");
+        });
+    }
+
+    #[macro_export]
+    macro_rules! c_str {
+        ($ptr:expr) => {{
+            if $ptr.is_null() {
+                Err(VPNError::NullPointer("null C string pointer".into()))
+            } else {
+                unsafe {
+                    match std::ffi::CStr::from_ptr($ptr).to_str() {
+                        Ok(s) => Ok(s),
+                        Err(e) => Err(VPNError::InvalidUtf8(format!("{}", e))),
+                    }
+                }
+            }
+        }};
+    }
+
+    pub fn create_vpn(config_json: *const c_char, fd: i32) -> *mut VpnContext {
+        init_logging();
+
+        debug!("Creating VPN");
+        let config_str = c_str!(config_json).expect("failed to parse config");
+
+        // Create runtime for async operations
+        let runtime = match Runtime::new() {
+            Ok(rt) => rt,
+            Err(e) => {
+                error!("Failed to create runtime: {}", e);
+                return ptr::null_mut();
+            }
+        };
+        // Load shadowsocks config
+        let config = match Config::load_from_str(config_str, ConfigType::Local) {
+            Ok(c) => c,
+            Err(e) => {
+                error!("Failed to load config: {}", e);
+                return ptr::null_mut();
+            }
+        };
+
+        let tun_config = TunDeviceConfig {
+            fd,
+            address: "10.1.10.2/24".parse().unwrap(),
+            destination: Some("0.0.0.0/0".parse().unwrap()),
+            mtu: Some(65536), // was 1500
+        };
+        // Create TUN device using runtime to handle async operations
+        let tun_device = match runtime.block_on(async { MobileTunDevice::new(tun_config, config).await }) {
+            Ok(tun) => tun,
+            Err(e) => {
+                error!("Failed to create TUN device: {:?}", e);
+                return ptr::null_mut();
+            }
+        };
+        // Allocate VPN context
+        let context = Box::new(VpnContext {
+            runtime,
+            tun_device,
+            vpn_task: None,
+        });
+
+        Box::into_raw(context)
+    }
+    pub unsafe fn start_vpn(context: *mut VpnContext) -> Result<i64, VPNError> {
+        let context = &mut *context;
+        let runtime_handle = context.runtime.handle().clone();
+
+        // Spawn the tunnel task into the background
+        runtime_handle.spawn(async move {
+            debug!("Starting TUN device in background task");
+            match context.tun_device.start_tunnel().await {
+                Ok(_) => {
+                    debug!("TUN tunnel completed successfully");
+                    VPNStatusCode::Connected.tou8() as i64
+                }
+                Err(e) => {
+                    error!("TUN tunnel error: {:?}", e);
+                    VPNStatusCode::Error.tou8() as i64
+                }
+            }
+        });
+
+        Ok(VPNStatusCode::Connecting.tou8() as i64)
+    }
+
+    pub unsafe fn get_status(context: *mut VpnContext) -> c_longlong {
+        let context = &mut *context;
+        context.runtime.block_on(async {
+            let status = context.tun_device.get_status_async().await;
+            status.code.tou8() as c_longlong
+        })
+
+    }
+}
 
 #[cfg(target_os = "android")]
 pub mod android {
-    use std::str::FromStr;
     use super::*;
     use jni::objects::{JClass, JString};
     use jni::sys::{jboolean, jint, jlong};
     use jni::JNIEnv;
     use log::{debug, error, info, LevelFilter};
+    use std::str::FromStr;
 
     pub fn init_logging(level: Option<LevelFilter>) {
         let level = level.unwrap_or_else(|| LevelFilter::Debug);
@@ -245,8 +422,7 @@ pub mod android {
             Ok(v) => v,
             Err(_) => return LevelFilter::Debug,
         };
-        LevelFilter::from_str(v["rust_log_lvl"].as_str().unwrap_or("Debug"))
-            .unwrap_or(LevelFilter::Debug)
+        LevelFilter::from_str(v["rust_log_lvl"].as_str().unwrap_or("Debug")).unwrap_or(LevelFilter::Debug)
     }
 
     #[no_mangle]
@@ -263,10 +439,6 @@ pub mod android {
         let lvl_filter = get_log_lvl(&config_str);
         init_logging(Some(lvl_filter));
 
-        let config_str: String = match env.get_string(&config) {
-            Ok(s) => s.into(),
-            Err(_) => return 0,
-        };
         // Create and initialize the singleton instance
         // Initialize directly without JNI frame
         match futures::executor::block_on(async { MobileDeviceManager::initialize(&config_str, fd as i32).await }) {
