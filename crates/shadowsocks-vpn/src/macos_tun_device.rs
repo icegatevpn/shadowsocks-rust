@@ -95,7 +95,7 @@ impl MacOSTunDevice {
         }
 
         // Create shadowsocks context and balancer
-        let mut context = ServiceContext::new();//Arc::new(ServiceContext::new());
+        let mut context = ServiceContext::new();
 
         // Configure connect options for the context
         let mut connect_opts = ConnectOpts::default();

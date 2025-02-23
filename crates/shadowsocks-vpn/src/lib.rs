@@ -258,6 +258,7 @@ pub unsafe extern "C" fn get_status(context: *mut VpnContext) -> c_longlong {
     ios::get_status(context)
 }
 
+#[cfg(target_os = "ios")]
 #[no_mangle]
 pub extern "C" fn test_logging() {
     ios::test_logging()
