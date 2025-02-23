@@ -3,13 +3,9 @@ use crate::service::key_generator::generate_key;
 use async_channel::{unbounded, Receiver, Sender};
 use axum::extract::{Path as AxPath, Path};
 use axum::routing::{delete, put};
-use axum::{
-    extract::State,
-    http::StatusCode,
-    response::{IntoResponse, Response},
-    routing::{get, post},
-    Json, Router,
-};
+use axum::{debug_handler, extract::State, http::StatusCode, response::{IntoResponse, Response}, routing::{get, post}, Json, Router};
+#[cfg(feature = "manager")]
+use axum_server::tls_rustls::RustlsConfig;
 use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
 use shadowsocks::manager::domain_command::DomainCommand;
@@ -264,6 +260,7 @@ fn json_api_message(success: bool, msg: String) -> Json<ApiResponse> {
         data: None,
     })
 }
+
 pub async fn run_web_service(
     manager_socket_path: String,
     host_name: String,
@@ -635,13 +632,13 @@ struct AccessKey {
     access_url: Option<String>,
 }
 
+
 #[cfg(feature = "database")]
 async fn create_access_key(
     State(state): State<AppState>,
     payload: Option<Json<CreateAccessKeyRequest>>,
 ) -> impl IntoResponse {
     let mut db = state.db.lock().await;
-
     // Get name from payload or generate default
     let key_name = match payload {
         Some(ref req) => &req.name.clone().unwrap_or_else(|| format!("user_{}", chrono::Utc::now().timestamp())),
@@ -716,6 +713,7 @@ async fn create_access_key(
         }),
     )
 }
+
 #[cfg(not(feature = "database"))]
 async fn create_access_key(State(_): State<AppState>) -> impl IntoResponse {
     warn!("create_access_key, not implemented with no database");
