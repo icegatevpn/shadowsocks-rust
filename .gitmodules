@@ -1,0 +1,4 @@
+[submodule "rust-tun"]
+	path = rust-tun
+	url = git@github.com:icegatevpn/rust-tun.git
+	branch = master
