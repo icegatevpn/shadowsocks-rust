@@ -1,6 +1,6 @@
 use std::cell::RefCell;
 
-#[cfg(any(target_os = "android", target_os = "ios"))]
+#[cfg(any(target_os = "android", target_os = "ios", target_os = "tvos"))]
 mod mobile_singleton;
 
 // Thread-local storage for error messages
@@ -17,7 +17,7 @@ fn set_last_error<E: std::fmt::Display>(err: E) {
 
 #[cfg(target_os = "macos")]
 mod macos_tun_device;
-#[cfg(any(target_os = "android", target_os = "ios"))]
+#[cfg(any(target_os = "android", target_os = "ios", target_os = "tvos"))]
 mod mobile_tun_device;
 #[cfg(target_os = "windows")]
 pub mod windows_tun_device;
@@ -37,9 +37,9 @@ use std::{
 use std::ffi::c_longlong;
 use tokio::runtime::Runtime;
 
-#[cfg(any(target_os = "android", target_os = "ios"))]
+#[cfg(any(target_os = "android", target_os = "ios", target_os = "tvos"))]
 use crate::mobile_singleton::MobileDeviceManager;
-#[cfg(any(target_os = "android", target_os = "ios"))]
+#[cfg(any(target_os = "android", target_os = "ios", target_os = "tvos"))]
 use crate::mobile_tun_device::MobileTunDevice;
 
 #[cfg(target_os = "macos")]
@@ -63,7 +63,7 @@ pub struct VpnContext {
     #[cfg(target_os = "windows")]
     device: WindowsTunDevice,
     vpn_task: Option<JoinHandle<std::io::Result<()>>>,
-    #[cfg(target_os = "ios")]
+    #[cfg(any(target_os = "ios", target_os = "tvos"))]
     tun_device: MobileTunDevice,
 }
 
@@ -190,7 +190,7 @@ pub extern "C" fn vpn_start(context: *mut VpnContext) -> bool {
 }
 
 #[no_mangle]
-#[cfg(any(target_os = "ios", target_os = "macos", target_os = "windows"))]
+#[cfg(any(target_os = "ios", target_os = "tvos", target_os = "macos", target_os = "windows"))]
 pub extern "C" fn vpn_stop(context: *mut VpnContext) -> bool {
     let context = match unsafe { context.as_mut() } {
         Some(c) => c,
@@ -217,7 +217,7 @@ pub extern "C" fn vpn_stop(context: *mut VpnContext) -> bool {
         }
     }
 
-    #[cfg(any(target_os = "ios", target_os = "android"))]
+    #[cfg(any(target_os = "ios", target_os = "tvos", target_os = "android"))]
     match context.runtime.block_on(async { MobileDeviceManager::stop().await }) {
         Ok(_) => true,
         Err(e) => {
@@ -237,7 +237,7 @@ pub extern "C" fn vpn_destroy(context: *mut VpnContext) {
         }
     }
 }
-#[cfg(target_os = "ios")]
+#[cfg(any(target_os = "ios", target_os = "tvos"))]
 #[no_mangle]
 pub unsafe extern "C" fn create_vpn(
     config_json: *const c_char,
@@ -246,25 +246,25 @@ pub unsafe extern "C" fn create_vpn(
     ios::create_vpn(config_json, fd)
 }
 
-#[cfg(target_os = "ios")]
+#[cfg(any(target_os = "ios", target_os = "tvos"))]
 #[no_mangle]
 pub unsafe extern "C" fn start_vpn(context: *mut VpnContext) -> c_longlong {
     ios::start_vpn(context).unwrap_or_else(|e| -1)
 }
 
-#[cfg(target_os = "ios")]
+#[cfg(any(target_os = "ios", target_os = "tvos"))]
 #[no_mangle]
 pub unsafe extern "C" fn get_status(context: *mut VpnContext) -> c_longlong {
     ios::get_status(context)
 }
 
-#[cfg(target_os = "ios")]
+#[cfg(any(target_os = "ios", target_os = "tvos"))]
 #[no_mangle]
 pub extern "C" fn test_logging() {
     ios::test_logging()
 }
 
-#[cfg(target_os = "ios")]
+#[cfg(any(target_os = "ios", target_os = "tvos"))]
 pub mod ios {
     use crate::mobile_tun_device::{MobileTunDevice, TunDeviceConfig, VPNStatus, VPNStatusCode};
     use crate::VpnContext;
