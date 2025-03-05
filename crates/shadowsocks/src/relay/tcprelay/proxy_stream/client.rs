@@ -9,7 +9,7 @@ use std::{
 use bytes::{BufMut, BytesMut};
 use cfg_if::cfg_if;
 use futures::ready;
-use log::trace;
+use log::{debug, trace};
 use once_cell::sync::Lazy;
 use pin_project::pin_project;
 use tokio::{
@@ -30,14 +30,14 @@ use crate::{
 };
 
 #[derive(Debug)]
-enum ProxyClientStreamWriteState {
+pub enum ProxyClientStreamWriteState {
     Connect(Address),
     Connecting(BytesMut),
     Connected,
 }
 
 #[derive(Debug)]
-enum ProxyClientStreamReadState {
+pub enum ProxyClientStreamReadState {
     #[cfg(feature = "aead-cipher-2022")]
     CheckRequestNonce,
     Established,
@@ -49,8 +49,8 @@ enum ProxyClientStreamReadState {
 pub struct ProxyClientStream<S> {
     #[pin]
     stream: CryptoStream<S>,
-    writer_state: ProxyClientStreamWriteState,
-    reader_state: ProxyClientStreamReadState,
+    pub writer_state: ProxyClientStreamWriteState,
+    pub reader_state: ProxyClientStreamReadState,
     context: SharedContext,
 }
 
@@ -320,7 +320,7 @@ where
 {
     fn poll_write(self: Pin<&mut Self>, cx: &mut task::Context<'_>, buf: &[u8]) -> Poll<Result<usize, io::Error>> {
         let this = self.project();
-
+        debug!("><><><>< pull write 2");
         loop {
             match this.writer_state {
                 ProxyClientStreamWriteState::Connect(ref addr) => {

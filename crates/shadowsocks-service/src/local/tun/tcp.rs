@@ -13,9 +13,9 @@ use std::{
     thread::{self, JoinHandle, Thread},
     time::Duration,
 };
-
-use log::{debug, error, trace};
-use shadowsocks::{net::TcpSocketOpts, relay::socks5::Address};
+use futures::future::ok;
+use log::{debug, error, info, trace};
+use shadowsocks::{net::TcpSocketOpts, relay::socks5::Address, ProxyClientStream};
 use smoltcp::{
     iface::{Config as InterfaceConfig, Interface, PollResult, SocketHandle, SocketSet},
     phy::{DeviceCapabilities, Medium},
@@ -25,11 +25,9 @@ use smoltcp::{
     wire::{HardwareAddress, IpAddress, IpCidr, Ipv4Address, Ipv6Address, TcpPacket},
 };
 use spin::Mutex as SpinMutex;
-use tokio::{
-    io::{AsyncRead, AsyncWrite, ReadBuf},
-    sync::{mpsc, oneshot},
-};
-
+use tokio::{io::{AsyncRead, AsyncWrite, ReadBuf}, sync::{mpsc, oneshot}, time};
+use shadowsocks::net::TcpStream;
+use shadowsocks::relay::tcprelay::proxy_stream::client::ProxyClientStreamWriteState;
 use crate::{
     local::{
         context::ServiceContext,
@@ -38,7 +36,8 @@ use crate::{
         utils::{establish_tcp_tunnel, establish_tcp_tunnel_bypassed},
     }, net::utils::to_ipv4_mapped
 };
-
+use crate::local::net::tcp::auto_proxy_stream::DebugStatus;
+use crate::net::MonProxyStream;
 use super::virt_device::VirtTunDevice;
 
 // NOTE: Default buffer could contain 20 AEAD packets
@@ -593,6 +592,9 @@ async fn establish_client_tcp_redir(
 
     let mut remote =
         AutoProxyClientStream::connect_with_opts(context, &server, addr, server.connect_opts_ref()).await?;
+    debug!(" <><><><><> {}", remote.debug());
+
+
     establish_tcp_tunnel(svr_cfg, &mut stream, &mut remote, peer_addr, addr).await
 }
 

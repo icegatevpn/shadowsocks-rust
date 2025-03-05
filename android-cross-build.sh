@@ -1,14 +1,14 @@
 #!/opt/homebrew/bin/bash
 
-/*
-  Requires the Android NDK installed:
-  https://developer.android.com/ndk/downloads
-  Onse installed, use below command to set ANDROID_NDK_HOME
-  export ANDROID_NDK_HOME=~/Library/Android/sdk/ndk/27.0.12077973
-
-  This uses Cargo NDK to build Android images: https://docs.rs/crate/cargo-ndk/0.6.1
-  Install: cargo install cargo-ndk
-*/
+# /*
+#   Requires the Android NDK installed:
+#   https://developer.android.com/ndk/downloads
+#   Onse installed, use below command to set ANDROID_NDK_HOME
+#   export ANDROID_NDK_HOME=~/Library/Android/sdk/ndk/27.0.12077973
+# 
+#   This uses Cargo NDK to build Android images: https://docs.rs/crate/cargo-ndk/0.6.1
+#   Install: cargo install cargo-ndk
+# */
 # Configuration
 RUST_PROJECT_PATH="."
 OUTPUT_DIR="target/android-libs"
@@ -22,8 +22,8 @@ if [ -z "$BASH_VERSION" ]; then
 fi
 
 # Build targets
-TARGETS="x86_64-linux-android aarch64-linux-android armv7-linux-androideabi i686-linux-android"
-# TARGETS="aarch64-linux-android"
+#TARGETS="x86_64-linux-android aarch64-linux-android armv7-linux-androideabi i686-linux-android"
+TARGETS="aarch64-linux-android"
 declare -A ABI_MAP
 ABI_MAP["x86_64-linux-android"]="x86_64"
 ABI_MAP["aarch64-linux-android"]="arm64-v8a"

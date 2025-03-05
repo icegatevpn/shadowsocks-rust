@@ -13,7 +13,20 @@
     "local_address": "127.0.0.1",
     "local_port": 1080,
     "outbound_bind_interface": "en0",
-    "protocol": "tun",
+    "locals": [
+    {
+      "protocol": "tun",
+      "tun_interface_name": "utun9",
+      "local_address": "127.0.0.1",
+      "local_port": 1081,
+      "mode": "tcp_and_udp"
+    },
+    {
+      "protocol": "socks",
+      "local_address": "127.0.0.1",
+      "local_port": 1080,
+      "mode": "tcp_and_udp"
+    }],
     "log": {
     	"level": 1,
     },

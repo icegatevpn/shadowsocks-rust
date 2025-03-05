@@ -143,7 +143,6 @@ impl MobileTunDevice {
         let net_helper = StaticDeviceNetHelper::new(tun_config.address.addr(), tun_config.address.netmask());
         builder.with_net_helper(net_helper);
         builder.mode(Mode::TcpAndUdp);
-        builder.name("shadowsocks-rust-tun-device");
         let (s, r) = mpsc::unbounded_channel();
         Ok(MobileTunDevice {
             device: Arc::new(Mutex::new(Some(builder))),

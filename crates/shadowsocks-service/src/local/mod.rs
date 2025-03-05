@@ -8,7 +8,7 @@ use std::{
 };
 
 use futures::future;
-use log::trace;
+use log::{debug, trace};
 use shadowsocks::{
     config::Mode,
     net::{AcceptOpts, ConnectOpts},
@@ -426,7 +426,10 @@ impl Server {
                         builder.destination(address);
                     }
                     if let Some(name) = local_config.tun_interface_name {
+                        debug!("<><><> name {}",name);
                         builder.name(&name);
+                    } else {
+                        debug!("<><><> no name: {:?}", local_config);
                     }
                     if let Some(c) = config.udp_max_associations {
                         builder.udp_capacity(c);

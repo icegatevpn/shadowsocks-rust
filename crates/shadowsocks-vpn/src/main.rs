@@ -178,15 +178,25 @@ sslocal --protocol tun -s "[::1]:8388" -m "aes-256-gcm" -k "hello-kitty" --outbo
             "password": "yJxlMnbXB0fpbQ+YfBwmV4GVr1ndRbsEJXdrJFQNeRE=:aj0Wg39ZA/h6dUuZr60T3kMHRpQQDIivPeSOYi397C4=",
             "method": "2022-blake3-aes-256-gcm",
             "protocol": "tun",
+            "local_address": "127.0.0.1",
+            "local_port": 1086,
             "mode": "tcp_and_udp",
             "locals": [
                 {{
                     "protocol": "tun",
-                    "local_address": "10.10.0.2",
+                    "local_address": "127.0.0.1",
+                    "other_local_address": "127.0.0.1",
                     "local_port": 1086,
                     "mode": "tcp_and_udp",
-                    "tun_interface_address": "10.10.0.2/24",
                     "tun_interface_name": "icetun",
+                }},
+                {{
+                  "local_address": "127.0.0.1",
+                  "local_port": 5450,
+                  "local_dns_address": "local_dns_path",
+                  "remote_dns_address": "dns.google",
+                  "remote_dns_port": 53,
+                  "protocol": "dns"
                 }}
             ],
             "dns": "8.8.8.8,8.8.4.4",

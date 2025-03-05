@@ -22,8 +22,6 @@ mod mobile_tun_device;
 #[cfg(target_os = "windows")]
 pub mod windows_tun_device;
 
-#[cfg(target_os = "android")]
-use crate::mobile_singleton::MobileDeviceManager;
 use env_logger::Target;
 #[cfg(not(target_os = "android"))]
 use log::{debug, error, info};

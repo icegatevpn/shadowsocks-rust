@@ -7,14 +7,15 @@ use std::{
     sync::Arc,
     task::{self, Poll},
 };
-
+use std::fmt::Pointer;
+use log::{debug, warn};
 use pin_project::pin_project;
 use shadowsocks::{
     net::{ConnectOpts, TcpStream},
     relay::{socks5::Address, tcprelay::proxy_stream::ProxyClientStream},
 };
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
-
+use shadowsocks::relay::tcprelay::proxy_stream::client::{ProxyClientStreamReadState, ProxyClientStreamWriteState};
 use crate::{
     local::{context::ServiceContext, loadbalancing::ServerIdent},
     net::MonProxyStream,
@@ -28,6 +29,41 @@ use super::auto_proxy_io::AutoProxyIo;
 pub enum AutoProxyClientStream {
     Proxied(#[pin] ProxyClientStream<MonProxyStream<TcpStream>>),
     Bypassed(#[pin] TcpStream),
+}
+
+pub trait DebugStatus {
+    fn debug(&self) -> String;
+}
+
+impl DebugStatus for AutoProxyClientStream {
+    fn debug(&self) -> String {
+        match self {
+            AutoProxyClientStream::Proxied(p) => {
+                let readState = match p.reader_state {
+                    ProxyClientStreamReadState::CheckRequestNonce => {
+                        "check request nonce"
+                    }
+                    ProxyClientStreamReadState::Established => {
+                        "established connection"
+                    }
+                };
+                match p.writer_state {
+                    ProxyClientStreamWriteState::Connect(_) => {
+                        format!(" +++++ connect {}", readState).to_owned()
+                    }
+                    ProxyClientStreamWriteState::Connecting(_) => {
+                        format!(" +++++ connecting {}", readState).to_owned()
+                    }
+                    ProxyClientStreamWriteState::Connected => {
+                        format!(" +++++ connected {}", readState).to_owned()
+                    }
+                }
+            },
+            AutoProxyClientStream::Bypassed(t) => {
+                " +++++ Bypassed".to_string()
+            }
+        }
+    }
 }
 
 impl AutoProxyClientStream {
@@ -57,6 +93,7 @@ impl AutoProxyClientStream {
         if context.check_target_bypassed(&addr).await {
             AutoProxyClientStream::connect_bypassed_with_opts(context, addr, opts).await
         } else {
+            debug!("...... {} is already being proxied: {:?}", addr, opts);
             AutoProxyClientStream::connect_proxied_with_opts(context, server, addr, opts).await
         }
     }
@@ -126,7 +163,7 @@ impl AutoProxyClientStream {
             connect_opts,
             |stream| MonProxyStream::from_stream(stream, flow_stat),
         )
-        .await
+            .await
         {
             Ok(s) => s,
             Err(err) => {
@@ -169,6 +206,7 @@ impl AsyncRead for AutoProxyClientStream {
 
 impl AsyncWrite for AutoProxyClientStream {
     fn poll_write(self: Pin<&mut Self>, cx: &mut task::Context<'_>, buf: &[u8]) -> Poll<io::Result<usize>> {
+        debug!("><><><>< pull write 1");
         match self.project() {
             AutoProxyClientStreamProj::Proxied(s) => s.poll_write(cx, buf),
             AutoProxyClientStreamProj::Bypassed(s) => s.poll_write(cx, buf),
@@ -183,6 +221,7 @@ impl AsyncWrite for AutoProxyClientStream {
     }
 
     fn poll_shutdown(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<io::Result<()>> {
+        warn!(" ------ SUTDOWN ----");
         match self.project() {
             AutoProxyClientStreamProj::Proxied(s) => s.poll_shutdown(cx),
             AutoProxyClientStreamProj::Bypassed(s) => s.poll_shutdown(cx),

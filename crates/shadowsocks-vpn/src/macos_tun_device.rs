@@ -1,4 +1,5 @@
 use std::io;
+use std::net::{IpAddr, Ipv4Addr};
 use log::{debug, error, info, trace, warn};
 use shadowsocks::config::Mode;
 use shadowsocks_service::{
@@ -12,6 +13,8 @@ use shadowsocks_service::{
 use std::process::Command;
 use std::sync::Arc;
 use std::time::Duration;
+use env_logger::builder;
+use ipnet::IpNet;
 use tokio::sync::Mutex;
 use serde::{Deserialize, Serialize};
 use shadowsocks::net::ConnectOpts;
@@ -122,16 +125,24 @@ impl MacOSTunDevice {
                 io::ErrorKind::InvalidInput,
                 "No TUN configuration found in config"
             ))?;
-
+        debug!("<><><>< BLAHHH {:?}", tun_config.config.addr);
+        debug!("....... address: {:?}", &tun_config.config.tun_interface_address);
         // Create and configure TUN builder
         let mut builder = TunBuilder::new(context, balancer);
-        builder.mode(tun_config.config.mode);
-        if let Some(address) = &tun_config.config.tun_interface_address {
-            builder.address(*address);
-        }
-        if let Some(destination) = &tun_config.config.tun_interface_destination {
-            builder.destination(*destination);
-        }
+        // builder.mode(tun_config.config.mode);
+        // if let Some(address) = &tun_config.config.tun_interface_address {
+        //     builder.address(*address);
+        // }
+
+        builder.address( IpNet::V4("10.10.0.2/24".parse().unwrap()));//IpNet::V4("10.1.10.2"));
+        // if let Some(destination) = &tun_config.config.tun_interface_destination {
+        //     builder.destination(*destination);
+        // }
+        // builder.destination(IpNet::V4("0.0.0.0/0".parse().unwrap()));
+        builder.destination(IpNet::new(Ipv4Addr::new(10, 10, 0, 255).into(), 24).unwrap());
+        // IpAddr::V4(Ipv4Addr::new(10, 0, 0, 255))
+        builder.mode(Mode::TcpAndUdp);
+        builder.name("utun666");
 
         // Configure more aggressive UDP cleanup
         builder.udp_expiry_duration(Duration::from_secs(15));
@@ -140,7 +151,6 @@ impl MacOSTunDevice {
 
         // Let shadowsocks create and configure the TUN interface
         let mut tun = builder.build().await?;
-        tun.create_handle(5000).expect("failed to create tun handle");
 
         // Store the interface name for cleanup
         if let Ok(name) = tun.interface_name() {
@@ -246,6 +256,7 @@ impl MacOSTunDevice {
     }
 
     async fn configure_routing(&self, interface: &str) -> io::Result<()> {
+        // return Ok(());  bypass all!!
         // Save current routing state before making changes
         let route_state = self.save_routing_state().await?;
         debug!("Configuring routes with default gateway: {}", route_state.default_gateway);
@@ -298,9 +309,6 @@ impl MacOSTunDevice {
                         String::from_utf8_lossy(&add_output.stderr))
             ));
         }
-
-
-
         Ok(())
     }
 
