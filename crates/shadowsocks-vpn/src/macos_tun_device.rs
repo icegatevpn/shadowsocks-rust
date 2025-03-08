@@ -10,19 +10,23 @@ use shadowsocks_service::{
         tun::{TunBuilder},
     },
 };
-use std::process::Command;
+use shadowsocks_rust::service::local;
+use clap::Command;
+use std::process::{Command as ProcessCommand, ExitCode};
+use shadowsocks_rust::VERSION;
 use std::sync::Arc;
 use std::time::Duration;
+use clap::builder::Str;
 use env_logger::builder;
-use ipnet::IpNet;
 use tokio::sync::Mutex;
 use serde::{Deserialize, Serialize};
-use shadowsocks::net::ConnectOpts;
 use shadowsocks::ServerAddr;
+use shadowsocks_rust::error::{ShadowsocksError};
 use shadowsocks_service::config::ProtocolType;
+
 #[cfg(target_os = "macos")]
 pub struct MacOSTunDevice {
-    config: Config,
+    config: Option<Config>,
     tun_interface: Option<String>,
     running: Arc<Mutex<bool>>,
     original_routes: Arc<Mutex<Option<String>>>,
@@ -39,140 +43,123 @@ struct RouteState {
 #[cfg(target_os = "macos")]
 impl MacOSTunDevice {
 
-    pub fn new(config: Config) -> io::Result<Self> {
+    pub fn new() -> io::Result<Self> {
         Ok(MacOSTunDevice {
-            config,
+            config: None,
             tun_interface: None,
             running: Arc::new(Mutex::new(false)),
             original_routes: Arc::new(Mutex::new(None)),
         })
     }
     async fn add_bypass_route_for_server(&self, default_gateway: &str) -> io::Result<()> {
-        for server in &self.config.server {
-            let server_addr = match server.config.addr() {
-                ServerAddr::SocketAddr(addr) => addr.ip().to_string(),
-                ServerAddr::DomainName(domain, _) => {
-                    // Get server's IP if it's a hostname
-                    use tokio::net::lookup_host;
-                    if let Ok(mut addrs) = lookup_host(format!("{}:0", domain)).await {
-                        if let Some(addr) = addrs.next() {
-                            addr.ip().to_string()
+        if let Some(config) = self.config.as_ref() {
+            for server in &config.server {
+                let server_addr = match server.config.addr() {
+                    ServerAddr::SocketAddr(addr) => addr.ip().to_string(),
+                    ServerAddr::DomainName(domain, _) => {
+                        // Get server's IP if it's a hostname
+                        use tokio::net::lookup_host;
+                        if let Ok(mut addrs) = lookup_host(format!("{}:0", domain)).await {
+                            if let Some(addr) = addrs.next() {
+                                addr.ip().to_string()
+                            } else {
+                                warn!("Could not resolve server address: {}", domain);
+                                continue;
+                            }
                         } else {
-                            warn!("Could not resolve server address: {}", domain);
+                            warn!("Failed to lookup server address: {}", domain);
                             continue;
                         }
-                    } else {
-                        warn!("Failed to lookup server address: {}", domain);
-                        continue;
                     }
-                }
-            };
+                };
 
-            info!(
+                info!(
                 "Adding bypass route for server {} via gateway {}",
                 server_addr, &default_gateway
             );
 
-            // Add bypass route for the server
-            let output = Command::new("route")
-                .arg("-n")
-                .arg("add")
-                .arg("-host")
-                .arg(&server_addr)
-                .arg("-gateway")
-                .arg(&default_gateway)
-                .output()?;
+                // Add bypass route for the server
+                let output = ProcessCommand::new("route")
+                    .arg("-n")
+                    .arg("add")
+                    .arg("-host")
+                    .arg(&server_addr)
+                    .arg("-gateway")
+                    .arg(&default_gateway)
+                    .output()?;
 
-            if !output.status.success() {
-                let error = String::from_utf8_lossy(&output.stderr);
-                warn!("Failed to add server bypass route for {}: {}", server_addr, error);
+                if !output.status.success() {
+                    let error = String::from_utf8_lossy(&output.stderr);
+                    warn!("Failed to add server bypass route for {}: {}", server_addr, error);
+                }
             }
         }
 
+
         Ok(())
     }
-    pub async fn start(&mut self) -> io::Result<()> {
+    pub async fn start(&mut self, config_str: String) -> io::Result<()> {
         if self.is_running().await {
             warn!("TUN device already running");
             return Ok(());
         }
 
-        // Create shadowsocks context and balancer
-        let mut context = ServiceContext::new();
-
-        // Configure connect options for the context
-        let mut connect_opts = ConnectOpts::default();
-        connect_opts.tcp.nodelay = true;
-        connect_opts.tcp.fastopen = true;
-        connect_opts.tcp.keepalive = Some(Duration::from_secs(30));
-        context.set_connect_opts(connect_opts);
-
-        let context = Arc::new(context);
-
-        let mut balancer = PingBalancerBuilder::new(context.clone(), Mode::TcpAndUdp);
-
-        // Add servers from config
-        for server in &self.config.server {
-            balancer.add_server(server.clone());
-        }
-
-        let balancer = balancer.build().await?;
-
-        // Get the TUN configuration from the locals
-        let tun_config = self.config.local.iter()
-            .find(|local| local.config.protocol == ProtocolType::Tun)
-            .ok_or_else(|| io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "No TUN configuration found in config"
-            ))?;
-        debug!("<><><>< BLAHHH {:?}", tun_config.config.addr);
-        debug!("....... address: {:?}", &tun_config.config.tun_interface_address);
-        // Create and configure TUN builder
-        let mut builder = TunBuilder::new(context, balancer);
-        // builder.mode(tun_config.config.mode);
-        // if let Some(address) = &tun_config.config.tun_interface_address {
-        //     builder.address(*address);
-        // }
-
-        builder.address( IpNet::V4("10.10.0.2/24".parse().unwrap()));//IpNet::V4("10.1.10.2"));
-        // if let Some(destination) = &tun_config.config.tun_interface_destination {
-        //     builder.destination(*destination);
-        // }
-        // builder.destination(IpNet::V4("0.0.0.0/0".parse().unwrap()));
-        builder.destination(IpNet::new(Ipv4Addr::new(10, 10, 0, 255).into(), 24).unwrap());
-        // IpAddr::V4(Ipv4Addr::new(10, 0, 0, 255))
-        builder.mode(Mode::TcpAndUdp);
-        builder.name("utun666");
-
-        // Configure more aggressive UDP cleanup
-        builder.udp_expiry_duration(Duration::from_secs(15));
-        // Limit maximum concurrent UDP associations
-        builder.udp_capacity(256);
-
-        // Let shadowsocks create and configure the TUN interface
-        let mut tun = builder.build().await?;
-
-        // Store the interface name for cleanup
-        if let Ok(name) = tun.interface_name() {
-            self.tun_interface = Some(name.clone());
-            // Configure routing once interface is ready
-            self.configure_routing(&name).await?;
-        }
-
-        *self.running.lock().await = true;
-
         // Spawn the TUN device task
-        tokio::spawn(async move {
-            if let Err(e) = tun.run().await {
-                error!("TUN device error: {}", e);
+        let mut app = Command::new("shadowsocks").version(VERSION);
+        app = local::define_command_line_options(app);
+
+        let matches = app.get_matches();
+        // let conf_str = self.config_str.clone();
+
+        // Create the local service runtime and future
+        let (config, mut runtime, main_fut) = match local::create(&matches, Some(&config_str)) {
+            Ok((cf, rt, fut)) => (cf, rt, fut),
+            Err(err) => {
+                error!("Failed to create Shadowsocks service: {}", err);
+                return Err(io::Error::new(io::ErrorKind::Other, format!("Service creation error: {}", err)));
             }
+        };
+        let running = self.running.clone();
+        std::thread::spawn(move || {
+            info!("Starting Shadowsocks service in background thread");
+
+            // This is now safe because we're in a new OS thread
+            match runtime.block_on(main_fut) {
+                Ok(_) => {
+                    info!("Shadowsocks service completed successfully");
+                }
+                Err(err) => {
+                    error!("Shadowsocks service error: {}", err);
+                }
+            }
+
+            // Update the running state when the service exits
+            let _ = futures::executor::block_on(async {
+                *running.lock().await = false;
+            });
         });
 
-        Ok(())
+        *self.running.lock().await = true;
+        self.config = Some(config.clone());
+
+        if let Some(tun) = config.local.iter().find(|ff|{
+            ff.config.protocol == ProtocolType::Tun
+        }) {
+            self.tun_interface = tun.config.tun_interface_name.clone();
+            info!("Shadowsocks running on Tun {:?}...",self.tun_interface)
+        }
+
+        let mut ret: io::Result<()> = Ok(());
+        // Configure routing
+        if let Some(interface) = &self.tun_interface {
+            ret = self.configure_routing(interface).await;
+        }
+        info!("<<< hehehe:::::: {:?}", ret);
+        ret
     }
 
     async fn save_routing_state(&self) -> io::Result<RouteState> {
-        let output = Command::new("netstat").arg("-rn").output()?;
+        let output = ProcessCommand::new("netstat").arg("-rn").output()?;
         if !output.status.success() {
             return Err(io::Error::new(io::ErrorKind::Other, "Failed to get routing state"));
         }
@@ -201,7 +188,7 @@ impl MacOSTunDevice {
             .map(|line| line.trim().to_string())
             .collect();
 
-        info!("Saved route state - Gateway: {}, Interface: {}",
+        debug!("Saved route state - Gateway: {}, Interface: {}",
             gateway, interface);
 
         Ok(RouteState {
@@ -211,7 +198,7 @@ impl MacOSTunDevice {
         })
     }
     fn native_default_gateway(&self) -> io::Result<String> {
-        let output = Command::new("route")
+        let output = ProcessCommand::new("route")
             .args(["-n", "get", "default"])
             .output()?;
 
@@ -240,7 +227,7 @@ impl MacOSTunDevice {
         debug!("Current default gateway is: {}", &default_gateway);
 
         // First try to delete the existing default route
-        let delete_output = Command::new("route")
+        let delete_output = ProcessCommand::new("route")
             .arg("-n")
             .arg("delete")
             .arg("default")
@@ -275,7 +262,7 @@ impl MacOSTunDevice {
         self.disable_ipv6(&route_state.interface).await?;
 
         // Now add our new default route through the TUN interface
-        let add_output = Command::new("route")
+        let add_output = ProcessCommand::new("route")
             .arg("-n")
             .arg("add")
             .arg("default")
@@ -290,7 +277,7 @@ impl MacOSTunDevice {
             String::from_utf8_lossy(&add_output.stderr));
 
             // Try to restore the original default route
-            let restore_output = Command::new("route")
+            let restore_output = ProcessCommand::new("route")
                 .arg("-n")
                 .arg("add")
                 .arg("default")
@@ -314,7 +301,7 @@ impl MacOSTunDevice {
 
     fn device_service_name(&self, interface: &str) -> io::Result<String> {
         // Get network service name for the interface
-        let output = Command::new("networksetup")
+        let output = ProcessCommand::new("networksetup")
             .args(["-listallhardwareports"])
             .output()?;
         let output_str = String::from_utf8_lossy(&output.stdout);
@@ -339,10 +326,10 @@ impl MacOSTunDevice {
         // Get network service name for the interface
 
         let service = self.device_service_name(original_interface)?;
-        info!("Disabling IPv6 on service: {} (interface: {})", service, original_interface);
+        debug!("Disabling IPv6 on service: {} (interface: {})", service, original_interface);
 
         // Disable IPv6 on the network service
-        let output = Command::new("networksetup")
+        let output = ProcessCommand::new("networksetup")
             .args(["-setv6off", &service])
             .output()?;
 
@@ -357,10 +344,10 @@ impl MacOSTunDevice {
     async fn restore_ipv6(&self, original_interface: &str) -> io::Result<()> {
         // Get network service name for the interface
         let service = self.device_service_name(original_interface)?;
-        info!("Restoring IPv6 on service: {} (interface: {})", service, original_interface);
+        debug!("Restoring IPv6 on service: {} (interface: {})", service, original_interface);
 
         // Re-enable IPv6 on the network service
-        let output = Command::new("networksetup")
+        let output = ProcessCommand::new("networksetup")
             .args(["-setv6automatic", &service])
             .output()?;
 
@@ -382,7 +369,7 @@ impl MacOSTunDevice {
         debug!("Restoring default route via gateway: {}", route_state.default_gateway);
 
         // Then restore the original default route
-        let output = Command::new("route")
+        let output = ProcessCommand::new("route")
             .arg("-n")
             .arg("add")
             .arg("-net")
@@ -402,7 +389,7 @@ impl MacOSTunDevice {
         }
 
         // Verify the restoration
-        let check_output = Command::new("netstat").arg("-rn").output()?;
+        let check_output = ProcessCommand::new("netstat").arg("-rn").output()?;
         trace!("Final route table: {}", String::from_utf8_lossy(&check_output.stdout));
 
         Ok(())
@@ -434,7 +421,7 @@ impl MacOSTunDevice {
         debug!("Removing VPN routes and restoring original routing...");
 
         // Remove the default route through our TUN interface
-        let output = Command::new("route")
+        let output = ProcessCommand::new("route")
             .arg("-n")
             .arg("delete")
             .arg("-net")
@@ -453,39 +440,42 @@ impl MacOSTunDevice {
         }
 
         // Remove server bypass routes
-        for server in &self.config.server {
-            let server_addr = match server.config.addr() {
-                ServerAddr::SocketAddr(addr) => addr.ip().to_string(),
-                ServerAddr::DomainName(domain, _) => {
-                    use tokio::net::lookup_host;
-                    if let Ok(mut addrs) = lookup_host(format!("{}:0", domain)).await {
-                        if let Some(addr) = addrs.next() {
-                            addr.ip().to_string()
+        if let Some(config) = self.config.as_ref() {
+            for server in &config.server {
+                let server_addr = match server.config.addr() {
+                    ServerAddr::SocketAddr(addr) => addr.ip().to_string(),
+                    ServerAddr::DomainName(domain, _) => {
+                        use tokio::net::lookup_host;
+                        if let Ok(mut addrs) = lookup_host(format!("{}:0", domain)).await {
+                            if let Some(addr) = addrs.next() {
+                                addr.ip().to_string()
+                            } else {
+                                continue;
+                            }
                         } else {
                             continue;
                         }
-                    } else {
-                        continue;
                     }
-                }
-            };
+                };
 
-            let output = Command::new("route")
-                .arg("-n")
-                .arg("delete")
-                .arg("-host")
-                .arg(&server_addr)
-                .output()?;
-            debug!("Remove other default route:({}) {}",server_addr,  String::from_utf8_lossy(&output.stdout));
+                let output = ProcessCommand::new("route")
+                    .arg("-n")
+                    .arg("delete")
+                    .arg("-host")
+                    .arg(&server_addr)
+                    .output()?;
+                debug!("Remove other default route:({}) {}",server_addr,  String::from_utf8_lossy(&output.stdout));
 
-            if !output.status.success() {
-                warn!(
+                if !output.status.success() {
+                    warn!(
                     "Failed to remove bypass route for server {}: {}",
                     server_addr,
                     String::from_utf8_lossy(&output.stderr)
                 );
+                }
             }
         }
+
         // Restore original routing state
         if let Err(e) = self.restore_routing_state().await {
             error!("Failed to restore original routing state: {}", e);
@@ -501,10 +491,7 @@ impl MacOSTunDevice {
     }
 
     pub async fn stop(&self) -> io::Result<()> {
-        if !self.is_running().await {
-            return Ok(());
-        }
-
+        debug!("STOPPING...");
         if let Some(interface) = &self.tun_interface {
             self.cleanup_routing(interface).await?;
         }
@@ -522,7 +509,7 @@ impl MacOSTunDevice {
         let service = self.device_service_name(interface)?;
 
         // Check IPv6 status
-        let output = Command::new("networksetup")
+        let output = ProcessCommand::new("networksetup")
             .args(["-getinfo", &service])
             .output()?;
 
@@ -531,7 +518,7 @@ impl MacOSTunDevice {
         if !info.contains("IPv6: Automatic") {
             warn!("IPv6 may not be properly enabled on {}. Current network info:\n{}", service, info);
             // Try one more time to enable it
-            let _ = Command::new("networksetup")
+            let _ = ProcessCommand::new("networksetup")
                 .args(["-setv6automatic", &service])
                 .output()?;
         }

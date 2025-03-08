@@ -28,7 +28,7 @@ where
     S: AsyncRead + AsyncWrite + AutoProxyIo + Unpin + DebugStatus,
 {
     if shadow.is_proxied() {
-        info!(
+        debug!(
             "established tcp tunnel {} <-> {} through sever {} (outbound: {})",
             peer_addr,
             target_addr,
@@ -38,8 +38,6 @@ where
     } else {
         return establish_tcp_tunnel_bypassed(plain, shadow, peer_addr, target_addr).await;
     }
-
-
 
     // https://github.com/shadowsocks/shadowsocks-rust/issues/232
     //
@@ -55,19 +53,16 @@ where
         }
 
         let mut buffer = [0u8; 8192];
-
-        // match time::timeout(Duration::from_millis(500), plain.read(&mut buffer)).await {
         match time::timeout(Duration::from_millis(500), plain.read(&mut buffer)).await {
             Ok(Ok(0)) => {
                 // EOF. Just terminate right here.
                 return Ok(());
             }
             Ok(Ok(n)) => {
-
                 // Send the first packet.
                 // shadow.write_all(&buffer[..n]).await?;
                 // Send the first packet
-                debug!("Received {} bytes from client, forwarding to server", n);
+                trace!("Received {} bytes from client, forwarding to server", n);
 
                 // Verify again before write
                 if let Err(e) = verify_connection(shadow, "Proxied shadow (before write)").await {
@@ -77,7 +72,7 @@ where
                 }
 
                 shadow.write_all(&buffer[..n]).await?;
-                debug!("Successfully wrote initial data to server");
+                trace!("Successfully wrote initial data to server");
             }
             Ok(Err(err)) => {
                 error!("Failed to read from client stream: {}", err);
@@ -92,7 +87,7 @@ where
                 //     target_addr
                 // );
                 // Timeout. Send handshake to server.
-                debug!("Timeout waiting for client data, sending empty handshake");
+                trace!("Timeout waiting for client data, sending empty handshake");
 
                 // Verify again before handshake
                 if let Err(e) = verify_connection(shadow, "Proxied shadow (before handshake)").await {
@@ -101,7 +96,7 @@ where
                 }
 
                 let _ = shadow.write(&[]).await?;
-                debug!("Successfully sent empty handshake");
+                trace!("Successfully sent empty handshake");
 
                 me_debug!(
                     "tcp tunnel {} -> {} (proxied) sent handshake without data",
@@ -114,7 +109,7 @@ where
 
     match copy_encrypted_bidirectional(svr_cfg.method(), shadow, plain).await {
         Ok((wn, rn)) => {
-            me_debug!( // trace!
+            trace!(
                 "tcp tunnel {} <-> {} (proxied) closed, L2R {} bytes, R2L {} bytes",
                 peer_addr,
                 target_addr,
@@ -123,7 +118,7 @@ where
             );
         }
         Err(err) => {
-            me_debug!( // trace!
+            trace!(
                 "tcp tunnel {} <-> {} (proxied) closed with error: {}",
                 peer_addr,
                 target_addr,
@@ -180,7 +175,7 @@ where
     P: AsyncRead + AsyncWrite + Unpin,
     S: AsyncRead + AsyncWrite + Unpin,
 {
-    debug!("establishing tcp tunnel {} <-> {} bypassed", peer_addr, target_addr);
+    trace!("establishing tcp tunnel {} <-> {} bypassed", peer_addr, target_addr);
 
     // Verify shadow socket connectivity by attempting a zero-byte write
     // This can detect disconnected sockets without affecting the data stream
@@ -242,16 +237,13 @@ pub async fn verify_connection<S>(socket: &mut S, description: &str) -> io::Resu
 where
     S: AsyncWrite + Unpin + DebugStatus,
 {
-    debug!(" <><><><><> {}", socket.debug());
     // Try a zero-byte write to check if the socket is connected
     // This doesn't send any actual data but will fail if the socket is disconnected
     match socket.write(&[]).await {
         Ok(_) => {
-            debug!("++++++++ {} socket verified as connected", description);
             Ok(())
         }
         Err(e) => {
-            error!("-------- {} socket verification failed: {}", description, e);
             Err(e)
         }
     }

@@ -70,7 +70,6 @@ impl<S> ProxyServerStream<S> {
         let writer_state = ProxyServerStreamWriteState::Established;
 
         const EMPTY_IDENTITY: [Bytes; 0] = [];
-        debug!("+++++++++++++++++++++");
 
         ProxyServerStream {
             stream: CryptoStream::from_stream_with_identity(

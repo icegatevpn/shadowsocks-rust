@@ -637,7 +637,6 @@ impl EncryptedWriter {
     where
         S: AsyncWrite + Unpin + ?Sized,
     {
-        debug!("<><><><><> poll_write_encrypted 3 called");
         if buf.len() > MAX_PACKET_SIZE {
             buf = &buf[..MAX_PACKET_SIZE];
         }
@@ -645,7 +644,6 @@ impl EncryptedWriter {
         loop {
             match self.state {
                 EncryptWriteState::AssembleHeader => {
-                    debug!("<><><> assemble header");
                     // Step 1. AEAD(TYPE + TIMESTAMP [+ REQUEST_SALT] + LENGTH)
                     let request_salt_len = match self.request_salt {
                         None => 0,
@@ -686,7 +684,6 @@ impl EncryptedWriter {
                 }
 
                 EncryptWriteState::AssemblePacket => {
-                    debug!("<><><> AssemblePacket");
                     // Step 1. Append Length
                     let length_size = 2 + self.cipher.tag_len();
                     self.buffer.reserve(length_size);
@@ -713,11 +710,9 @@ impl EncryptedWriter {
                     self.state = EncryptWriteState::Writing { pos: 0 };
                 }
                 EncryptWriteState::Writing { ref mut pos } => {
-                    debug!("<><><> Writing ({}){:?}", self.buffer.len(), self.buffer.to_vec());
                     while *pos < self.buffer.len() {
                         let n = ready!(Pin::new(&mut *stream).poll_write(cx, &self.buffer[*pos..]))?;
                         if n == 0 {
-                            warn!(" <<<<<<< EOF!!");
                             return Err(ErrorKind::UnexpectedEof.into()).into();
                         }
                         *pos += n;

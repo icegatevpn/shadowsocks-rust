@@ -320,7 +320,6 @@ where
 {
     fn poll_write(self: Pin<&mut Self>, cx: &mut task::Context<'_>, buf: &[u8]) -> Poll<Result<usize, io::Error>> {
         let this = self.project();
-        debug!("><><><>< pull write 2");
         loop {
             match this.writer_state {
                 ProxyClientStreamWriteState::Connect(ref addr) => {

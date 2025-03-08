@@ -130,7 +130,6 @@ use shadowsocks_vpn::{vpn_create, vpn_destroy, vpn_last_error, vpn_start, vpn_st
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 fn main() -> std::io::Result<()> {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("debug")).init();
 
     let pair = Arc::new((Mutex::new(true), Condvar::new()));
     let pair2 = pair.clone();
@@ -177,9 +176,6 @@ sslocal --protocol tun -s "[::1]:8388" -m "aes-256-gcm" -k "hello-kitty" --outbo
             "server_port": 8765,
             "password": "yJxlMnbXB0fpbQ+YfBwmV4GVr1ndRbsEJXdrJFQNeRE=:aj0Wg39ZA/h6dUuZr60T3kMHRpQQDIivPeSOYi397C4=",
             "method": "2022-blake3-aes-256-gcm",
-            "protocol": "tun",
-            "local_address": "127.0.0.1",
-            "local_port": 1086,
             "mode": "tcp_and_udp",
             "locals": [
                 {{
@@ -188,7 +184,7 @@ sslocal --protocol tun -s "[::1]:8388" -m "aes-256-gcm" -k "hello-kitty" --outbo
                     "other_local_address": "127.0.0.1",
                     "local_port": 1086,
                     "mode": "tcp_and_udp",
-                    "tun_interface_name": "icetun",
+                    "tun_interface_name": "utun666",
                 }},
                 {{
                   "local_address": "127.0.0.1",
@@ -202,7 +198,10 @@ sslocal --protocol tun -s "[::1]:8388" -m "aes-256-gcm" -k "hello-kitty" --outbo
             "dns": "8.8.8.8,8.8.4.4",
             "no_delay": true,
             "keep_alive": 15,
-            "timeout": 300
+            "timeout": 300,
+            "log": {{
+            	"level": 1,
+             }},
         }}"#
     );
     let c_string = CString::new(config).expect("CString::new failed");

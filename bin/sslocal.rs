@@ -16,5 +16,5 @@ fn main() -> ExitCode {
     app = local::define_command_line_options(app);
 
     let matches = app.get_matches();
-    local::main(&matches)
+    local::main(&matches, None)
 }

@@ -287,7 +287,6 @@ impl EncryptedWriter {
     where
         S: AsyncWrite + Unpin + ?Sized,
     {
-        debug!("<><><><><> poll_write_encrypted 2 called");
         match *self {
             #[cfg(feature = "stream-cipher")]
             EncryptedWriter::Stream(ref mut writer) => writer.poll_write_encrypted(cx, stream, buf).map_err(Into::into),
@@ -586,7 +585,6 @@ where
         cx: &mut task::Context<'_>,
         buf: &[u8],
     ) -> Poll<ProtocolResult<usize>> {
-        debug!("<><><><><> poll_write_encrypted called");
         let CryptoStream {
             ref mut enc,
             ref mut stream,

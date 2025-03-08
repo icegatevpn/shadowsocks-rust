@@ -98,7 +98,6 @@ impl ProxyListener {
     {
         let (stream, peer_addr) = self.listener.accept().await?;
         let stream = map_fn(stream);
-        debug!("++++++++++++++++++ 00000000");
         let stream = ProxyServerStream::from_stream_with_user_manager(
             self.context.clone(),
             stream,

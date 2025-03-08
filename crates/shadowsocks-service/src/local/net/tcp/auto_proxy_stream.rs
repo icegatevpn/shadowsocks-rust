@@ -206,7 +206,6 @@ impl AsyncRead for AutoProxyClientStream {
 
 impl AsyncWrite for AutoProxyClientStream {
     fn poll_write(self: Pin<&mut Self>, cx: &mut task::Context<'_>, buf: &[u8]) -> Poll<io::Result<usize>> {
-        debug!("><><><>< pull write 1");
         match self.project() {
             AutoProxyClientStreamProj::Proxied(s) => s.poll_write(cx, buf),
             AutoProxyClientStreamProj::Bypassed(s) => s.poll_write(cx, buf),
@@ -221,7 +220,6 @@ impl AsyncWrite for AutoProxyClientStream {
     }
 
     fn poll_shutdown(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<io::Result<()>> {
-        warn!(" ------ SUTDOWN ----");
         match self.project() {
             AutoProxyClientStreamProj::Proxied(s) => s.poll_shutdown(cx),
             AutoProxyClientStreamProj::Bypassed(s) => s.poll_shutdown(cx),

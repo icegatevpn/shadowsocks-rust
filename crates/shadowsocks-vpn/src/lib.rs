@@ -49,10 +49,12 @@ use shadowsocks_service::config::{Config, ConfigType};
 
 // Opaque type for the VPN context
 use tokio::task::JoinHandle;
+use shadowsocks_rust::service::local;
 
 // Opaque type for the VPN context
 #[repr(C)]
 pub struct VpnContext {
+    config: String,
     runtime: Runtime,
     #[cfg(any(target_os = "android"))]
     device: MobileDeviceManager,
@@ -110,17 +112,8 @@ pub extern "C" fn vpn_create(config_json: *const c_char) -> *mut VpnContext {
         }
     };
 
-    // Parse config
-    let config = match Config::load_from_str(config_str, ConfigType::Local) {
-        Ok(c) => c,
-        Err(e) => {
-            set_last_error(format!("Failed to parse config: {}", e));
-            return ptr::null_mut();
-        }
-    };
-
     #[cfg(target_os = "macos")]
-    let device = match MacOSTunDevice::new(config) {
+    let device = match MacOSTunDevice::new() {
         Ok(d) => d,
         Err(_) => return ptr::null_mut(),
     };
@@ -133,6 +126,7 @@ pub extern "C" fn vpn_create(config_json: *const c_char) -> *mut VpnContext {
 
     // Create context
     let context = Box::new(VpnContext {
+        config: config_str.to_string(),
         runtime,
         device,
         vpn_task: None,
@@ -159,10 +153,7 @@ pub extern "C" fn vpn_start(context: *mut VpnContext) -> bool {
         return Err(VpnError::RuntimeError);
 
         #[cfg(any(target_os = "macos", target_os = "windows"))]
-        return context.device.start().await;
-        // let result = context.device.start().await;
-
-        // result
+        return context.device.start(context.config.clone()).await;
     });
 
     // Store handle for potential cancellation/cleanup

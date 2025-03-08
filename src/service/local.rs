@@ -12,7 +12,7 @@ use std::{
 
 use clap::{builder::PossibleValuesParser, Arg, ArgAction, ArgGroup, ArgMatches, Command, ValueHint};
 use futures::future::{self, FutureExt};
-use log::{error, info, trace};
+use log::{debug, error, info, trace, warn};
 use tokio::{
     self,
     runtime::{Builder, Runtime},
@@ -577,28 +577,38 @@ pub fn define_command_line_options(mut app: Command) -> Command {
 }
 
 /// Create `Runtime` and `main` entry
-pub fn create(matches: &ArgMatches) -> ShadowsocksResult<(Runtime, impl Future<Output = ShadowsocksResult>)> {
+pub fn create(matches: &ArgMatches, config_str: Option<&str>) -> ShadowsocksResult<(Config, Runtime, impl Future<Output = ShadowsocksResult>)> {
     #[cfg_attr(not(feature = "local-online-config"), allow(unused_mut))]
     let (config, _, runtime) = {
         let config_path_opt = matches.get_one::<PathBuf>("CONFIG").cloned().or_else(|| {
+
             if !matches.contains_id("SERVER_CONFIG") {
                 match crate::config::get_default_config_path("local.json") {
-                    None => None,
+                    None => { None },
                     Some(p) => {
                         println!("loading default config {p:?}");
                         Some(p)
                     }
                 }
-            } else {
-                None
-            }
+            } else { None }
         });
 
         let mut service_config = match config_path_opt {
             Some(ref config_path) => ServiceConfig::load_from_file(config_path)
                 .map_err(|err| ShadowsocksError::LoadConfigFailure(format!("loading config {config_path:?}, {err}")))?,
-            None => ServiceConfig::default(),
+            None => {
+                match config_str {
+                    Some(c ) => {
+                        ServiceConfig::load_from_str(c)
+                            .map_err(|err| ShadowsocksError::LoadConfigFailure(format!("loading config {c:?}, {err}")))?
+                    },
+                    None => {
+                        ServiceConfig::default()
+                    }
+                }
+            },
         };
+
         service_config.set_options(matches);
 
         #[cfg(feature = "logging")]
@@ -610,13 +620,22 @@ pub fn create(matches: &ArgMatches) -> ShadowsocksResult<(Runtime, impl Future<O
                 logging::init_with_config("sslocal", &service_config.log);
             }
         }
-
-        trace!("{:?}", service_config);
+        trace!("<<<< {:?}", service_config);
 
         let mut config = match config_path_opt {
             Some(cpath) => Config::load_from_file(&cpath, ConfigType::Local)
                 .map_err(|err| ShadowsocksError::LoadConfigFailure(format!("loading config {cpath:?}, {err}")))?,
-            None => Config::new(ConfigType::Local),
+            None => {
+                match config_str {
+                    Some(c ) => {
+                        Config::load_from_str(c, ConfigType::Local)
+                            .map_err(|err| ShadowsocksError::LoadConfigFailure(format!("loading config {c:?}, {err}")))?
+                    },
+                    None => {
+                        Config::new(ConfigType::Local)
+                    }
+                }
+            },
         };
 
         if let Some(svr_addr) = matches.get_one::<String>("SERVER_ADDR") {
@@ -979,11 +998,12 @@ pub fn create(matches: &ArgMatches) -> ShadowsocksResult<(Runtime, impl Future<O
 
         (config, service_config, runtime)
     };
+    let config_clone = config.clone();
 
     let main_fut = async move {
-        let config_path = config.config_path.clone();
+        let config_path = config_clone.config_path.clone();
 
-        let instance = Server::new(config).await.expect("create local");
+        let instance = Server::new(config_clone).await.expect("create local");
 
         let reload_task = match config_path {
             Some(config_path) => ServerReloader {
@@ -1032,13 +1052,13 @@ pub fn create(matches: &ArgMatches) -> ShadowsocksResult<(Runtime, impl Future<O
         }
     };
 
-    Ok((runtime, main_fut))
+    Ok((config, runtime, main_fut))
 }
 
 /// Program entrance `main`
 #[inline]
-pub fn main(matches: &ArgMatches) -> ExitCode {
-    match create(matches).and_then(|(runtime, main_fut)| runtime.block_on(main_fut)) {
+pub fn main(matches: &ArgMatches, config_str: Option<&str>) -> ExitCode {
+    match create(matches, config_str).and_then(|(_, runtime, main_fut)| runtime.block_on(main_fut)) {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
             eprintln!("{err}");
