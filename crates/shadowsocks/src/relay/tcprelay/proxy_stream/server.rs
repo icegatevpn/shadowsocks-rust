@@ -9,7 +9,6 @@ use std::{
 use arc_swap::ArcSwapAny;
 use bytes::Bytes;
 use futures::ready;
-use log::debug;
 use pin_project::pin_project;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use crate::{

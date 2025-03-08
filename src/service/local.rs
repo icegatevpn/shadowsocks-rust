@@ -12,7 +12,7 @@ use std::{
 
 use clap::{builder::PossibleValuesParser, Arg, ArgAction, ArgGroup, ArgMatches, Command, ValueHint};
 use futures::future::{self, FutureExt};
-use log::{debug, error, info, trace, warn};
+use log::{debug, error, info, trace};
 use tokio::{
     self,
     runtime::{Builder, Runtime},

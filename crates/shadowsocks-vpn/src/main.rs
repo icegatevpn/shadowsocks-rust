@@ -9,11 +9,8 @@ mod windows_tun_device;
 
 use std::ffi::CString;
 use log::{debug, error, info};
-use shadowsocks_service::config::{Config, ConfigType};
 #[cfg(target_os = "windows")]
 use crate::windows_tun_device::WindowsTunDevice;
-use tokio::signal;
-
 
 #[cfg(target_os = "windows")]
 #[async_trait::async_trait]
@@ -30,8 +27,6 @@ impl TunDevice for WindowsTunDevice {
         WindowsTunDevice::is_running(self).await
     }
 }
-use std::io;
-use std::process::Command;
 use std::{thread};
 use std::io::ErrorKind;
 use std::sync::{Arc, Condvar, Mutex};

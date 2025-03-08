@@ -59,7 +59,7 @@ use aes::{
 use byte_string::ByteStr;
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use futures::ready;
-use log::{debug, error, trace, warn};
+use log::{error, trace};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use super::{crypto_io::StreamType, proxy_stream::protocol::v2::SERVER_STREAM_TIMESTAMP_MAX_DIFF};
 use crate::{

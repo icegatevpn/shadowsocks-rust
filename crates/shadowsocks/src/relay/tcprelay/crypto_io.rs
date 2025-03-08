@@ -12,7 +12,6 @@ use arc_swap::ArcSwapAny;
 use byte_string::ByteStr;
 use bytes::Bytes;
 use futures::ready;
-use log::debug;
 #[cfg(any(feature = "stream-cipher", feature = "aead-cipher", feature = "aead-cipher-2022"))]
 use log::trace;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};

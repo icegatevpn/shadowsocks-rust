@@ -8,7 +8,7 @@ use std::{
 };
 
 use futures::future;
-use log::{debug, trace};
+use log::{trace};
 use shadowsocks::{
     config::Mode,
     net::{AcceptOpts, ConnectOpts},

@@ -22,17 +22,14 @@ mod mobile_tun_device;
 #[cfg(target_os = "windows")]
 pub mod windows_tun_device;
 
-use env_logger::Target;
 #[cfg(not(target_os = "android"))]
-use log::{debug, error, info};
+use log::{debug, error};
 #[cfg(not(target_os = "android"))]
-use std::ptr::{self, NonNull};
+use std::ptr::{self};
 #[cfg(not(target_os = "android"))]
 use std::{
     ffi::{c_char, CStr, CString},
-    sync::Arc,
 };
-use std::ffi::c_longlong;
 use tokio::runtime::Runtime;
 
 #[cfg(any(target_os = "android", target_os = "ios", target_os = "tvos"))]
@@ -44,12 +41,9 @@ use crate::mobile_tun_device::MobileTunDevice;
 use crate::macos_tun_device::MacOSTunDevice;
 #[cfg(target_os = "windows")]
 use crate::windows_tun_device::WindowsTunDevice;
-#[cfg(not(target_os = "android"))]
-use shadowsocks_service::config::{Config, ConfigType};
 
 // Opaque type for the VPN context
 use tokio::task::JoinHandle;
-use shadowsocks_rust::service::local;
 
 // Opaque type for the VPN context
 #[repr(C)]

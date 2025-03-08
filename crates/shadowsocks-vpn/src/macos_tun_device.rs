@@ -1,27 +1,16 @@
 use std::io;
-use std::net::{IpAddr, Ipv4Addr};
 use log::{debug, error, info, trace, warn};
-use shadowsocks::config::Mode;
 use shadowsocks_service::{
     config::Config,
-    local::{
-        context::ServiceContext,
-        loadbalancing::PingBalancerBuilder,
-        tun::{TunBuilder},
-    },
 };
 use shadowsocks_rust::service::local;
 use clap::Command;
-use std::process::{Command as ProcessCommand, ExitCode};
+use std::process::{Command as ProcessCommand};
 use shadowsocks_rust::VERSION;
 use std::sync::Arc;
-use std::time::Duration;
-use clap::builder::Str;
-use env_logger::builder;
 use tokio::sync::Mutex;
 use serde::{Deserialize, Serialize};
 use shadowsocks::ServerAddr;
-use shadowsocks_rust::error::{ShadowsocksError};
 use shadowsocks_service::config::ProtocolType;
 
 #[cfg(target_os = "macos")]
@@ -112,7 +101,7 @@ impl MacOSTunDevice {
         // let conf_str = self.config_str.clone();
 
         // Create the local service runtime and future
-        let (config, mut runtime, main_fut) = match local::create(&matches, Some(&config_str)) {
+        let (config, runtime, main_fut) = match local::create(&matches, Some(&config_str)) {
             Ok((cf, rt, fut)) => (cf, rt, fut),
             Err(err) => {
                 error!("Failed to create Shadowsocks service: {}", err);
@@ -149,13 +138,11 @@ impl MacOSTunDevice {
             info!("Shadowsocks running on Tun {:?}...",self.tun_interface)
         }
 
-        let mut ret: io::Result<()> = Ok(());
         // Configure routing
         if let Some(interface) = &self.tun_interface {
-            ret = self.configure_routing(interface).await;
+            self.configure_routing(interface).await?
         }
-        info!("<<< hehehe:::::: {:?}", ret);
-        ret
+        Ok(())
     }
 
     async fn save_routing_state(&self) -> io::Result<RouteState> {

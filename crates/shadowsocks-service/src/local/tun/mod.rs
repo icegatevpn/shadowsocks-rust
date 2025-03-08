@@ -8,15 +8,8 @@ use std::{
     sync::Arc,
     time::Duration,
 };
-use std::ops::Deref;
-use std::os::fd::AsRawFd;
-use tokio::sync::Mutex;
-use std::sync::Weak;
 use byte_string::ByteStr;
-use bytes::Bytes;
 use cfg_if::cfg_if;
-use futures::executor::block_on;
-use futures::TryFutureExt;
 use ipnet::IpNet;
 use log::{debug, error, info, trace, warn};
 use shadowsocks::config::Mode;

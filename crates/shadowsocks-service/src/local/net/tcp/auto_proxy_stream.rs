@@ -7,8 +7,7 @@ use std::{
     sync::Arc,
     task::{self, Poll},
 };
-use std::fmt::Pointer;
-use log::{debug, warn};
+use log::{debug};
 use pin_project::pin_project;
 use shadowsocks::{
     net::{ConnectOpts, TcpStream},
@@ -39,7 +38,7 @@ impl DebugStatus for AutoProxyClientStream {
     fn debug(&self) -> String {
         match self {
             AutoProxyClientStream::Proxied(p) => {
-                let readState = match p.reader_state {
+                let read_state = match p.reader_state {
                     ProxyClientStreamReadState::CheckRequestNonce => {
                         "check request nonce"
                     }
@@ -49,13 +48,13 @@ impl DebugStatus for AutoProxyClientStream {
                 };
                 match p.writer_state {
                     ProxyClientStreamWriteState::Connect(_) => {
-                        format!(" +++++ connect {}", readState).to_owned()
+                        format!(" +++++ connect {}", read_state).to_owned()
                     }
                     ProxyClientStreamWriteState::Connecting(_) => {
-                        format!(" +++++ connecting {}", readState).to_owned()
+                        format!(" +++++ connecting {}", read_state).to_owned()
                     }
                     ProxyClientStreamWriteState::Connected => {
-                        format!(" +++++ connected {}", readState).to_owned()
+                        format!(" +++++ connected {}", read_state).to_owned()
                     }
                 }
             },

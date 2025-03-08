@@ -3,9 +3,8 @@ use crate::service::key_generator::generate_key;
 use async_channel::{unbounded, Receiver, Sender};
 use axum::extract::{Path as AxPath, Path};
 use axum::routing::{delete, put};
-use axum::{debug_handler, extract::State, http::StatusCode, response::{IntoResponse, Response}, routing::{get, post}, Json, Router};
+use axum::{extract::State, http::StatusCode, response::{IntoResponse, Response}, routing::{get, post}, Json, Router};
 #[cfg(feature = "manager")]
-use axum_server::tls_rustls::RustlsConfig;
 use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
 use shadowsocks::manager::domain_command::DomainCommand;
