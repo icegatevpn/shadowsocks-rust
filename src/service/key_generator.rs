@@ -1,6 +1,6 @@
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
-use rand::{rngs::OsRng, RngCore};
+use rand::{rng, Rng};
 use shadowsocks_service::shadowsocks::crypto::CipherKind;
 
 #[derive(Debug)]
@@ -32,7 +32,7 @@ pub fn generate_key(method: &str) -> Result<String, KeyGenError> {
 
     // Generate random bytes
     let mut key = vec![0u8; key_len];
-    OsRng.fill_bytes(&mut key);
+    rng().fill(&mut key[..]);
 
     // Base64 encode the key
     Ok(BASE64.encode(key))
