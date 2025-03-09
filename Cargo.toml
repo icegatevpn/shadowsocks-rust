@@ -9,7 +9,7 @@ documentation = "https://docs.rs/shadowsocks-rust"
 keywords = ["shadowsocks", "proxy", "socks", "socks5", "firewall"]
 license = "MIT"
 edition = "2021"
-rust-version = "1.80"
+rust-version = "1.83"
 
 [badges]
 maintenance = { status = "passively-maintained" }
@@ -133,10 +133,6 @@ hickory-dns = ["shadowsocks-service/hickory-dns"]
 # Hickory-DNS was renamed from Trust-DNS, keep compatibility.
 trust-dns = ["hickory-dns"]
 dns-over-tls = ["shadowsocks-service/dns-over-tls"]
-dns-over-native-tls = ["shadowsocks-service/dns-over-native-tls"]
-dns-over-native-tls-vendored = [
-    "shadowsocks-service/dns-over-native-tls-vendored",
-]
 dns-over-https = ["shadowsocks-service/dns-over-https"]
 dns-over-h3 = ["shadowsocks-service/dns-over-h3"]
 
@@ -242,11 +238,11 @@ cfg-if = "1"
 qrcode = { version = "0.14", default-features = false, optional = true }
 sysexits = "0.8"
 build-time = "0.1"
-directories = "5.0"
+directories = "6.0"
 xdg = "2.5"
 rpassword = "7.3"
 libc = { version = "0.2", features = ["extra_traits"] }
-rand = "0.8"
+rand = "0.9"
 
 futures = "0.3"
 tokio = { version = "1", features = ["rt", "signal", "macros", "signal"] }
@@ -268,7 +264,7 @@ rpmalloc = { version = "0.2", optional = true }
 
 shadowsocks-service = { version = "1.23.0", path = "./crates/shadowsocks-service" }
 
-windows-service = { version = "0.7", optional = true }
+windows-service = { version = "0.8", optional = true }
 chrono = "0.4.38"
 serde_json = "1.0"
 windows = "0.58.0"
