@@ -14,6 +14,7 @@ use shadowsocks_service::mysql_db::Database;
 use shadowsocks_service::shadowsocks;
 use shadowsocks_service::url_generator::generate_ssurl;
 use std::{collections::HashMap, fmt, sync::Arc};
+use futures::TryFutureExt;
 use tokio::{
     sync::{oneshot, Mutex},
     time::{timeout, Duration},
@@ -200,9 +201,9 @@ async fn add_user(State(state): State<AppState>, command: String) -> impl IntoRe
 }
 
 #[cfg(feature = "database")]
-async fn remove_user(State(state): State<AppState>, key: Option<AxPath<String>>) -> impl IntoResponse {
+async fn remove_user(State(state): State<AppState>, Path(key): Path<String>) -> impl IntoResponse {
     debug!("remove user:: Command: {:?}", key);
-    let uid = key.map(|m| m.0).unwrap_or_else(|| DEFAULT_CIPHER_METHOD.to_string());
+    let uid = key;
     let db = state.db.lock().await;
     let user = match db.get_user_by_id(uid.parse().unwrap()) {
         Ok(Some(user)) => user,
@@ -487,18 +488,18 @@ pub async fn run_web_service(
         .route(&format!("/{}/list", url_key), get(cmd_list))
         .route(&format!("/{}/ping", url_key), get(cmd_ping))
         .route(&format!("/{}/add_user", url_key), post(add_user))
-        .route(&format!("/{}/remove_user/:key", url_key), post(remove_user))
+        .route(&format!("/{}/remove_user/{{key}}", url_key), post(remove_user))
         .route(&format!("/{}/generate_key", url_key), post(generate_cipher_key_post))
         .route(&format!("/{}/generate_key", url_key), get(generate_cipher_key))
-        .route(&format!("/{}/generate_key/:method", url_key), get(generate_cipher_key))
-        .route(&format!("/{}/url/:user_id", url_key), get(generate_ssurl_handler))
+        .route(&format!("/{}/generate_key/{{method}}", url_key), get(generate_cipher_key))
+        .route(&format!("/{}/url/{{user_id}}", url_key), get(generate_ssurl_handler))
 
         // Add new REST API endpoints
         .route(&format!("/{}/access-keys", url_key), get(list_access_keys))
         .route(&format!("/{}/access-keys", url_key), post(create_access_key))
-        .route(&format!("/{}/access-keys/:id", url_key), get(get_access_key))
-        .route(&format!("/{}/access-keys/:id", url_key), delete(remove_access_key))
-        .route(&format!("/{}/access-keys/:id/name", url_key), put(rename_access_key))
+        .route(&format!("/{}/access-keys/{{id}}", url_key), get(get_access_key))
+        .route(&format!("/{}/access-keys/{{id}}", url_key), delete(remove_access_key))
+        .route(&format!("/{}/access-keys/{{id}}/name", url_key), put(rename_access_key))
         // .route("/metrics/transfer", get(get_metrics))
         .with_state(state);
 
@@ -752,10 +753,12 @@ async fn list_access_keys(State(state): State<AppState>) -> impl IntoResponse {
 async fn list_access_keys(State(_): State<AppState>) -> impl IntoResponse {
     warn!("list_access_keys, not implemented with no database");
 }
-
+//Path(user_id): Path<i64>
+//
 #[cfg(feature = "database")]
-async fn generate_ssurl_handler(State(state): State<AppState>, user_id: Option<AxPath<i64>>) -> impl IntoResponse {
-    let user_id = user_id.map(|m| m.0).unwrap_or_else(|| -1);
+// async fn generate_ssurl_handler(State(state): State<AppState>, user_id: Option<AxPath<i64>>) -> impl IntoResponse {
+async fn generate_ssurl_handler(State(state): State<AppState>, Path(user_id): Path<i64>) -> impl IntoResponse {
+    let user_id = user_id;//user_id.map(|m| m.0).unwrap_or_else(|| -1);
 
     let db = state.db.lock().await;
     if let Ok(params) = db.build_ssurl_params_from_user_id(user_id, "oops") {
@@ -788,11 +791,9 @@ async fn health_check() -> impl IntoResponse {
 }
 
 const DEFAULT_CIPHER_METHOD: &str = "2022-blake3-aes-256-gcm";
-
-async fn generate_cipher_key(method: Option<AxPath<String>>) -> impl IntoResponse {
+async fn generate_cipher_key(Path(method): Path<String>) -> impl IntoResponse {
     debug!("generate cipher_key method: {:?}", method);
     // Use the provided method or fall back to default
-    let method = method.map(|m| m.0).unwrap_or_else(|| DEFAULT_CIPHER_METHOD.to_string());
 
     match generate_key(&method) {
         Ok(_) => (
@@ -802,6 +803,7 @@ async fn generate_cipher_key(method: Option<AxPath<String>>) -> impl IntoRespons
         Err(err) => (StatusCode::BAD_REQUEST, json_api_message(false, err.to_string())),
     }
 }
+
 async fn generate_cipher_key_post(Json(payload): Json<GenerateKeyRequest>) -> impl IntoResponse {
     let method = payload.method.as_deref().unwrap_or(DEFAULT_CIPHER_METHOD);
     match generate_key(method) {
