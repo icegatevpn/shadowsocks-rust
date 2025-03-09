@@ -1,7 +1,7 @@
 use crate::service::domain_connection::connect_domain_socket;
 use crate::service::key_generator::generate_key;
 use async_channel::{unbounded, Receiver, Sender};
-use axum::extract::{Path as AxPath, Path};
+use axum::extract::{Path as AxPath, Path, Request};
 use axum::routing::{delete, put};
 use axum::{extract::State, http::StatusCode, response::{IntoResponse, Response}, routing::{get, post}, Json, Router};
 #[cfg(feature = "manager")]
@@ -632,18 +632,18 @@ struct AccessKey {
     access_url: Option<String>,
 }
 
-
 #[cfg(feature = "database")]
 async fn create_access_key(
     State(state): State<AppState>,
-    payload: Option<Json<CreateAccessKeyRequest>>,
+    payload: Json<CreateAccessKeyRequest>,
 ) -> impl IntoResponse {
     let mut db = state.db.lock().await;
     // Get name from payload or generate default
-    let key_name = match payload {
-        Some(ref req) => &req.name.clone().unwrap_or_else(|| format!("user_{}", chrono::Utc::now().timestamp())),
-        None => &format!("user_{}", chrono::Utc::now().timestamp()),
-    };
+    let key_name = payload.name.clone().unwrap_or_else(|| format!("user_{}", chrono::Utc::now().timestamp()));
+    // let key_name = match payload {
+    //     Some(ref req) => &req.name.clone().unwrap_or_else(|| format!("user_{}", chrono::Utc::now().timestamp())),
+    //     None => &format!("user_{}", chrono::Utc::now().timestamp()),
+    // };
     // Generate a random key
     let password = generate_key(DEFAULT_CIPHER_METHOD).expect("Failed to generate key");
     let servers = db.list_servers(true).expect("Failed to list servers");

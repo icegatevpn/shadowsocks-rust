@@ -66,7 +66,7 @@ use ipnet::IpNet;
 #[cfg(feature = "local-fake-dns")]
 use ipnet::{Ipv4Net, Ipv6Net};
 use log::warn;
-use rand::RngCore;
+use rand::{RngCore, TryRngCore};
 use rand::rngs::OsRng;
 use serde::{Deserialize, Serialize};
 #[cfg(any(feature = "local-tunnel", feature = "local-dns"))]
