@@ -83,7 +83,7 @@ pub extern "C" fn vpn_last_error() -> *mut c_char {
 }
 
 #[no_mangle]
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 pub extern "C" fn vpn_create(config_json: *const c_char) -> *mut VpnContext {
     if config_json.is_null() {
         return ptr::null_mut();
@@ -113,7 +113,7 @@ pub extern "C" fn vpn_create(config_json: *const c_char) -> *mut VpnContext {
     };
 
     #[cfg(target_os = "windows")]
-    let device = match WindowsTunDevice::new(config) {
+    let device = match WindowsTunDevice::new() {
         Ok(d) => d,
         Err(_) => return ptr::null_mut(),
     };
@@ -130,7 +130,7 @@ pub extern "C" fn vpn_create(config_json: *const c_char) -> *mut VpnContext {
 }
 
 #[no_mangle]
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 pub extern "C" fn vpn_start(context: *mut VpnContext) -> bool {
     let context = match unsafe { context.as_mut() } {
         Some(c) => c,

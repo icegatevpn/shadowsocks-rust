@@ -29,7 +29,8 @@ async-trait = "0.1"
 signal-hook = "0.3.17"
 clap = "4.5.31"
 shadowsocks-rust = { path = "../.." }
-
+[target.'cfg(windows)'.dependencies]
+ctrlc = "3.4"
 # Android-specific dependencies
 [target.'cfg(target_os = "android")'.dependencies]
 jni = { version = "0.21", features = ["invocation"] }

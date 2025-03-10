@@ -11,6 +11,8 @@ use std::io;
 use std::process::Command;
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use shadowsocks_rust::service::local;
+use shadowsocks_rust::VERSION;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct RouteState {
@@ -19,7 +21,7 @@ struct RouteState {
 }
 
 pub struct WindowsTunDevice {
-    config: Config,
+    config: Option<Config>,
     tun_interface: Option<String>,
     running: Arc<Mutex<bool>>,
     original_state: Arc<Mutex<Option<RouteState>>>,
@@ -27,9 +29,9 @@ pub struct WindowsTunDevice {
 }
 
 impl WindowsTunDevice {
-    pub fn new(config: Config) -> io::Result<Self> {
+    pub fn new() -> io::Result<Self> {
         Ok(WindowsTunDevice {
-            config,
+            config: None,
             tun_interface: None,
             running: Arc::default(),
             original_state: Arc::default(),
@@ -130,52 +132,54 @@ impl WindowsTunDevice {
         *self.original_state.lock().await = Some(state.clone());
 
         // Add route for VPN server through physical interface's default gateway
-        for server in &self.config.server {
-            let server_addr = match server.config.addr() {
-                ServerAddr::SocketAddr(addr) => addr.ip().to_string(),
-                ServerAddr::DomainName(domain, _) => {
-                    use tokio::net::lookup_host;
-                    if let Ok(mut addrs) = lookup_host(format!("{}:0", domain)).await {
-                        if let Some(addr) = addrs.next() {
-                            addr.ip().to_string()
+        if let Some(config) = self.config.as_ref() {
+            for server in &config.server {
+                let server_addr = match server.config.addr() {
+                    ServerAddr::SocketAddr(addr) => addr.ip().to_string(),
+                    ServerAddr::DomainName(domain, _) => {
+                        use tokio::net::lookup_host;
+                        if let Ok(mut addrs) = lookup_host(format!("{}:0", domain)).await {
+                            if let Some(addr) = addrs.next() {
+                                addr.ip().to_string()
+                            } else {
+                                warn!("Could not resolve server address: {}", domain);
+                                continue;
+                            }
                         } else {
-                            warn!("Could not resolve server address: {}", domain);
+                            warn!("Failed to lookup server address: {}", domain);
                             continue;
                         }
-                    } else {
-                        warn!("Failed to lookup server address: {}", domain);
-                        continue;
                     }
-                }
-            };
+                };
 
-            debug!(
-                "Adding route for VPN server {} via {}",
-                server_addr, state.default_gateway
-            );
-
-            // Delete any existing routes for VPN server
-            let _ = Command::new("route").args(["delete", &server_addr]).output()?;
-
-            // Add route for VPN server
-            let output = Command::new("route")
-                .args([
-                    "-p", // Make route persistent
-                    "add",
-                    &server_addr,
-                    "mask",
-                    "255.255.255.255",
-                    &state.default_gateway,
-                    "metric",
-                    "1",
-                ])
-                .output()?;
-
-            if !output.status.success() {
-                warn!(
-                    "Failed to add route for VPN server: {}",
-                    String::from_utf8_lossy(&output.stderr)
+                debug!(
+                    "Adding route for VPN server {} via {}",
+                    server_addr, state.default_gateway
                 );
+
+                // Delete any existing routes for VPN server
+                let _ = Command::new("route").args(["delete", &server_addr]).output()?;
+
+                // Add route for VPN server
+                let output = Command::new("route")
+                    .args([
+                        "-p", // Make route persistent
+                        "add",
+                        &server_addr,
+                        "mask",
+                        "255.255.255.255",
+                        &state.default_gateway,
+                        "metric",
+                        "1",
+                    ])
+                    .output()?;
+
+                if !output.status.success() {
+                    warn!(
+                        "Failed to add route for VPN server: {}",
+                        String::from_utf8_lossy(&output.stderr)
+                    );
+                }
             }
         }
 
@@ -245,24 +249,26 @@ impl WindowsTunDevice {
         }
 
         // Remove any persistent routes we added
-        for server in &self.config.server {
-            let server_addr = match server.config.addr() {
-                ServerAddr::SocketAddr(addr) => addr.ip().to_string(),
-                ServerAddr::DomainName(domain, _) => {
-                    use tokio::net::lookup_host;
-                    if let Ok(mut addrs) = lookup_host(format!("{}:0", domain)).await {
-                        if let Some(addr) = addrs.next() {
-                            addr.ip().to_string()
+        if let Some(config) = self.config.as_ref() {
+            for server in &config.server {
+                let server_addr = match server.config.addr() {
+                    ServerAddr::SocketAddr(addr) => addr.ip().to_string(),
+                    ServerAddr::DomainName(domain, _) => {
+                        use tokio::net::lookup_host;
+                        if let Ok(mut addrs) = lookup_host(format!("{}:0", domain)).await {
+                            if let Some(addr) = addrs.next() {
+                                addr.ip().to_string()
+                            } else {
+                                continue;
+                            }
                         } else {
                             continue;
                         }
-                    } else {
-                        continue;
                     }
-                }
-            };
+                };
 
-            let _ = Command::new("route").args(["delete", &server_addr]).output()?;
+                let _ = Command::new("route").args(["delete", &server_addr]).output()?;
+            }
         }
 
         Ok(())
@@ -311,80 +317,129 @@ impl WindowsTunDevice {
         Ok(())
     }
 
-    pub async fn start(&mut self) -> io::Result<()> {
+    pub async fn start(&mut self, config_str: String) -> io::Result<()> {
         if self.is_running().await {
             warn!("TUN device already running");
             return Ok(());
         }
 
-        // Get the TUN configuration from the locals
-        let tun_config = self
-            .config
-            .local
-            .iter()
-            .find(|local| local.config.protocol == ProtocolType::Tun)
-            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "No TUN configuration found in config"))?;
+        // Spawn the TUN device task
+        let mut app = clap::Command::new("shadowsocks").version(VERSION);
+        app = local::define_command_line_options(app);
 
-        // Create shadowsocks context and balancer
-        let context = Arc::new(ServiceContext::new());
-        let mut balancer = PingBalancerBuilder::new(context.clone(), Mode::TcpAndUdp);
+        let matches = app.get_matches();
+        // let conf_str = self.config_str.clone();
 
-        // Add servers from config
-        for server in &self.config.server {
-            balancer.add_server(server.clone());
-        }
+        // Create the local service runtime and future
+        let (config, runtime, main_fut) = match local::create(&matches, Some(&config_str)) {
+            Ok((cf, rt, fut)) => (cf, rt, fut),
+            Err(err) => {
+                error!("Failed to create Shadowsocks service: {}", err);
+                return Err(io::Error::new(io::ErrorKind::Other, format!("Service creation error: {}", err)));
+            }
+        };
+        let running = self.running.clone();
+        std::thread::spawn(move || {
+            info!("Starting Shadowsocks service in background thread");
 
-        let balancer = balancer.build().await?;
+            // This is now safe because we're in a new OS thread
+            match runtime.block_on(main_fut) {
+                Ok(_) => {
+                    info!("Shadowsocks service completed successfully");
+                }
+                Err(err) => {
+                    error!("Shadowsocks service error: {}", err);
+                }
+            }
 
-        // Create and configure TUN builder
-        let mut builder = TunBuilder::new(context, balancer);
-
-        // Configure the TUN interface based on the config
-        if let Some(name) = &tun_config.config.tun_interface_name {
-            builder.name(name);
-        }
-
-        if let Some(address) = &tun_config.config.tun_interface_address {
-            builder.address(*address);
-        }
-
-        if let Some(destination) = &tun_config.config.tun_interface_destination {
-            builder.destination(*destination);
-        }
-
-        builder.mode(tun_config.config.mode);
-
-        // Build the TUN interface
-        let tun = builder.build().await?;
-
-        // Store the interface name
-        if let Ok(name) = tun.interface_name() {
-            self.tun_interface = Some(name.clone());
-
-            // Disable IPv6
-            self.disable_ipv6_bindings().await?;
-
-            // Configure routing
-            self.configure_routing(&name).await?;
-        }
+            // Update the running state when the service exits
+            let _ = futures::executor::block_on(async {
+                *running.lock().await = false;
+            });
+        });
 
         *self.running.lock().await = true;
+        self.config = Some(config.clone());
 
-        // Run the TUN device
-        let task = tokio::spawn(async move {
-            if let Err(e) = tun.run().await {
-                error!("TUN device error: {}", e);
-            }
-            println!("tun finish");
-        });
-        *self.tun_task.lock().await = Some(task);
+        if let Some(tun) = config.local.iter().find(|ff|{
+            ff.config.protocol == ProtocolType::Tun
+        }) {
+            self.tun_interface = tun.config.tun_interface_name.clone();
+            info!("Shadowsocks running on Tun {:?}...",self.tun_interface)
+        }
+
+        // Configure routing
+        if let Some(interface) = &self.tun_interface {
+            self.configure_routing(interface).await?
+        }
         Ok(())
+
+        // // Get the TUN configuration from the locals
+        // let tun_config = self
+        //     .config
+        //     .local
+        //     .iter()
+        //     .find(|local| local.config.protocol == ProtocolType::Tun)
+        //     .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "No TUN configuration found in config"))?;
+        //
+        // // Create shadowsocks context and balancer
+        // let context = Arc::new(ServiceContext::new());
+        // let mut balancer = PingBalancerBuilder::new(context.clone(), Mode::TcpAndUdp);
+        //
+        // // Add servers from config
+        // for server in &self.config.server {
+        //     balancer.add_server(server.clone());
+        // }
+        //
+        // let balancer = balancer.build().await?;
+        //
+        // // Create and configure TUN builder
+        // let mut builder = TunBuilder::new(context, balancer);
+        //
+        // // Configure the TUN interface based on the config
+        // if let Some(name) = &tun_config.config.tun_interface_name {
+        //     builder.name(name);
+        // }
+        //
+        // if let Some(address) = &tun_config.config.tun_interface_address {
+        //     builder.address(*address);
+        // }
+        //
+        // if let Some(destination) = &tun_config.config.tun_interface_destination {
+        //     builder.destination(*destination);
+        // }
+        //
+        // builder.mode(tun_config.config.mode);
+        //
+        // // Build the TUN interface
+        // let tun = builder.build().await?;
+        //
+        // // Store the interface name
+        // if let Ok(name) = tun.interface_name() {
+        //     self.tun_interface = Some(name.clone());
+        //
+        //     // Disable IPv6
+        //     self.disable_ipv6_bindings().await?;
+        //
+        //     // Configure routing
+        //     self.configure_routing(&name).await?;
+        // }
+        //
+        // *self.running.lock().await = true;
+        //
+        // // Run the TUN device
+        // let task = tokio::spawn(async move {
+        //     if let Err(e) = tun.run().await {
+        //         error!("TUN device error: {}", e);
+        //     }
+        //     println!("tun finish");
+        // });
+        // *self.tun_task.lock().await = Some(task);
+        // Ok(())
     }
 
     pub async fn stop(&self) -> io::Result<()> {
-        if !self.is_running().await {
-            return Ok(());
-        }
+
         if let Some(task) = self.tun_task.lock().await.as_ref() {
             task.abort();
         }

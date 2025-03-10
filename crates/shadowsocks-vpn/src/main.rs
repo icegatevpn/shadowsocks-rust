@@ -12,21 +12,21 @@ use log::{debug, error, info};
 #[cfg(target_os = "windows")]
 use crate::windows_tun_device::WindowsTunDevice;
 
-#[cfg(target_os = "windows")]
-#[async_trait::async_trait]
-impl TunDevice for WindowsTunDevice {
-    async fn start(&mut self) -> std::io::Result<()> {
-        WindowsTunDevice::start(self).await
-    }
-
-    async fn stop(&self) -> std::io::Result<()> {
-        WindowsTunDevice::stop(self).await
-    }
-
-    async fn is_running(&self) -> bool {
-        WindowsTunDevice::is_running(self).await
-    }
-}
+// #[cfg(target_os = "windows")]
+// #[async_trait::async_trait]
+// impl TunDevice for WindowsTunDevice {
+//     async fn start(&mut self) -> std::io::Result<()> {
+//         WindowsTunDevice::start(self).await
+//     }
+//
+//     async fn stop(&self) -> std::io::Result<()> {
+//         WindowsTunDevice::stop(self).await
+//     }
+//
+//     async fn is_running(&self) -> bool {
+//         WindowsTunDevice::is_running(self).await
+//     }
+// }
 use std::{thread};
 use std::io::ErrorKind;
 use std::sync::{Arc, Condvar, Mutex};
@@ -176,7 +176,6 @@ sslocal --protocol tun -s "[::1]:8388" -m "aes-256-gcm" -k "hello-kitty" --outbo
                 {{
                     "protocol": "tun",
                     "local_address": "127.0.0.1",
-                    "other_local_address": "127.0.0.1",
                     "local_port": 1086,
                     "mode": "tcp_and_udp",
                     "tun_interface_name": "utun666",
@@ -184,8 +183,9 @@ sslocal --protocol tun -s "[::1]:8388" -m "aes-256-gcm" -k "hello-kitty" --outbo
                 {{
                   "local_address": "127.0.0.1",
                   "local_port": 5450,
-                  "local_dns_address": "local_dns_path",
-                  "remote_dns_address": "dns.google",
+                  "local_dns_address": "114.114.114.114",
+                  "local_dns_port": 53,
+                  "remote_dns_address": "8.8.8.8",
                   "remote_dns_port": 53,
                   "protocol": "dns"
                 }}
