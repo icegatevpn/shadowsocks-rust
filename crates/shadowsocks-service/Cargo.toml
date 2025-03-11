@@ -182,8 +182,9 @@ flate2 = { version = "1.0", optional = true }
 brotli = { version = "7.0", optional = true }
 zstd = { version = "0.13", optional = true }
 
-#tun = { version = "0.7.13", optional = true, features = ["async"] }
-tun = { path = "../../rust-tun", optional = true, features = ["async"]}
+# This is an ugly hack for now. Use remote tun interface for all builds except tvos, use local tun fork
+tun = { version = "0.7.13", optional = true, features = ["async"] }
+#tun = { path = "../../rust-tun", optional = true, features = ["async"]}
 etherparse = { version = "0.17", optional = true }
 smoltcp = { version = "0.12", optional = true, default-features = false, features = [
     "std",

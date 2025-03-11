@@ -125,7 +125,18 @@ impl WindowsTunDevice {
         Ok(())
     }
 
-    async fn configure_routing(&self, interface_name: &str) -> io::Result<()> {
+    async fn  configure_routing(&self, interface_name: &str) -> io::Result<()> {
+        let mut config_interface_name: Option<String> = None;
+        if let Some(config) = &self.config {
+            let tun = config.local.iter().find(|l| {
+                l.config.protocol == ProtocolType::Tun
+                });
+            if let Some(tun) = tun {
+                config_interface_name = Some(tun.config.tun_interface_address.unwrap().hosts().nth(0).unwrap().to_string());
+            }
+        };
+
+
         // Save current routing state
         let state = self.save_route_state().await?;
         debug!("Saving route state: {:?}", state);
@@ -163,7 +174,7 @@ impl WindowsTunDevice {
                 // Add route for VPN server
                 let output = Command::new("route")
                     .args([
-                        "-p", // Make route persistent
+                        // "-p", // Make route persistent
                         "add",
                         &server_addr,
                         "mask",
@@ -193,12 +204,12 @@ impl WindowsTunDevice {
         debug!("Adding new default route via TUN interface");
         let output = Command::new("route")
             .args([
-                "-p", // Make route persistent
+                // "-p", // Make route persistent
                 "add",
                 "0.0.0.0",
                 "mask",
                 "0.0.0.0",
-                "10.10.0.1", // TUN interface IP
+                &config_interface_name.unwrap(),
                 "metric",
                 "1",
             ])
@@ -328,7 +339,6 @@ impl WindowsTunDevice {
         app = local::define_command_line_options(app);
 
         let matches = app.get_matches();
-        // let conf_str = self.config_str.clone();
 
         // Create the local service runtime and future
         let (config, runtime, main_fut) = match local::create(&matches, Some(&config_str)) {
@@ -342,7 +352,6 @@ impl WindowsTunDevice {
         std::thread::spawn(move || {
             info!("Starting Shadowsocks service in background thread");
 
-            // This is now safe because we're in a new OS thread
             match runtime.block_on(main_fut) {
                 Ok(_) => {
                     info!("Shadowsocks service completed successfully");
@@ -368,74 +377,12 @@ impl WindowsTunDevice {
             info!("Shadowsocks running on Tun {:?}...",self.tun_interface)
         }
 
-        // Configure routing
+        // Configure routing and Disable IPv6
         if let Some(interface) = &self.tun_interface {
+            self.disable_ipv6_bindings().await?;
             self.configure_routing(interface).await?
         }
         Ok(())
-
-        // // Get the TUN configuration from the locals
-        // let tun_config = self
-        //     .config
-        //     .local
-        //     .iter()
-        //     .find(|local| local.config.protocol == ProtocolType::Tun)
-        //     .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "No TUN configuration found in config"))?;
-        //
-        // // Create shadowsocks context and balancer
-        // let context = Arc::new(ServiceContext::new());
-        // let mut balancer = PingBalancerBuilder::new(context.clone(), Mode::TcpAndUdp);
-        //
-        // // Add servers from config
-        // for server in &self.config.server {
-        //     balancer.add_server(server.clone());
-        // }
-        //
-        // let balancer = balancer.build().await?;
-        //
-        // // Create and configure TUN builder
-        // let mut builder = TunBuilder::new(context, balancer);
-        //
-        // // Configure the TUN interface based on the config
-        // if let Some(name) = &tun_config.config.tun_interface_name {
-        //     builder.name(name);
-        // }
-        //
-        // if let Some(address) = &tun_config.config.tun_interface_address {
-        //     builder.address(*address);
-        // }
-        //
-        // if let Some(destination) = &tun_config.config.tun_interface_destination {
-        //     builder.destination(*destination);
-        // }
-        //
-        // builder.mode(tun_config.config.mode);
-        //
-        // // Build the TUN interface
-        // let tun = builder.build().await?;
-        //
-        // // Store the interface name
-        // if let Ok(name) = tun.interface_name() {
-        //     self.tun_interface = Some(name.clone());
-        //
-        //     // Disable IPv6
-        //     self.disable_ipv6_bindings().await?;
-        //
-        //     // Configure routing
-        //     self.configure_routing(&name).await?;
-        // }
-        //
-        // *self.running.lock().await = true;
-        //
-        // // Run the TUN device
-        // let task = tokio::spawn(async move {
-        //     if let Err(e) = tun.run().await {
-        //         error!("TUN device error: {}", e);
-        //     }
-        //     println!("tun finish");
-        // });
-        // *self.tun_task.lock().await = Some(task);
-        // Ok(())
     }
 
     pub async fn stop(&self) -> io::Result<()> {
@@ -444,10 +391,7 @@ impl WindowsTunDevice {
             task.abort();
         }
         if let Some(state) = self.original_state.lock().await.as_ref() {
-            // Restore routing first
             self.restore_routing(state).await?;
-
-            // Then restore IPv6
             self.restore_ipv6().await?;
         }
 

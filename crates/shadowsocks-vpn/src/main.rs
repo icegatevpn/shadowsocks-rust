@@ -179,6 +179,7 @@ sslocal --protocol tun -s "[::1]:8388" -m "aes-256-gcm" -k "hello-kitty" --outbo
                     "local_port": 1086,
                     "mode": "tcp_and_udp",
                     "tun_interface_name": "utun666",
+                    "tun_interface_address": "10.13.2.1/24"
                 }},
                 {{
                   "local_address": "127.0.0.1",
