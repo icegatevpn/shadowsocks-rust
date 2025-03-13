@@ -124,7 +124,7 @@ database = ["shadowsocks-service/database"]
 # Enable utility
 utility = ["qrcode"]
 # Enable service
-service = ["local", "server"]#, "manager"]
+service = ["local", "server"]
 # Enable Windows Service
 winservice = ["service", "windows-service"]
 
