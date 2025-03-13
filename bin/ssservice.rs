@@ -21,7 +21,7 @@ fn main() -> ExitCode {
     if let Some(program_path) = env::args().next() {
         if let Some(program_name) = Path::new(&program_path).file_name() {
             match program_name.to_str() {
-                Some("sslocal") => return local::main(&local::define_command_line_options(app).get_matches()),
+                Some("sslocal") => return local::main(&local::define_command_line_options(app).get_matches(), None),
                 Some("ssserver") => return server::main(&server::define_command_line_options(app).get_matches()),
                 Some("ssmanager") => return manager::main(&manager::define_command_line_options(app).get_matches()),
                 _ => {}
@@ -43,7 +43,7 @@ fn main() -> ExitCode {
         .get_matches();
 
     match matches.subcommand() {
-        Some(("local", matches)) => local::main(matches),
+        Some(("local", matches)) => local::main(matches, None),
         Some(("server", matches)) => server::main(matches),
         Some(("manager", matches)) => manager::main(matches),
         Some(("genkey", matches)) => genkey::main(matches),
