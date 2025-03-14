@@ -2,6 +2,8 @@ use std::cell::RefCell;
 
 #[cfg(any(target_os = "android", target_os = "ios", target_os = "tvos"))]
 mod mobile_singleton;
+#[cfg(any(target_os = "ios", target_os = "tvos"))]
+use std::ffi::c_longlong;
 
 // Thread-local storage for error messages
 thread_local! {
@@ -342,6 +344,7 @@ pub mod ios {
         };
         // Allocate VPN context
         let context = Box::new(VpnContext {
+            config: config_str.to_string(),
             runtime,
             tun_device,
             vpn_task: None,
