@@ -56,6 +56,7 @@ use std::{
     string::ToString,
     time::Duration,
 };
+use std::os::fd::RawFd;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE;
 use cfg_if::cfg_if;
@@ -322,6 +323,9 @@ struct SSLocalExtConfig {
     #[cfg(all(feature = "local-tun", unix))]
     #[serde(skip_serializing_if = "Option::is_none")]
     tun_device_fd_from_path: Option<String>,
+    #[cfg(all(feature = "local-tun", unix))]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tun_device_fd: Option<RawFd>,
 
     /// SOCKS5
     #[cfg(feature = "local")]
@@ -1824,6 +1828,10 @@ impl Config {
                         if let Some(tun_device_fd_from_path) = local.tun_device_fd_from_path {
                             local_config.tun_device_fd_from_path = Some(From::from(tun_device_fd_from_path));
                         }
+                        #[cfg(all(feature = "local-tun", unix))]
+                        if let Some(tun_device_fd) = local.tun_device_fd {
+                            local_config.tun_device_fd = Some(From::from(tun_device_fd));
+                        }
 
                         #[cfg(feature = "local")]
                         if let Some(socks5_auth_config_path) = local.socks5_auth_config_path {
@@ -2943,6 +2951,11 @@ impl fmt::Display for Config {
                             .tun_device_fd_from_path
                             .as_ref()
                             .map(|p| p.to_str().expect("tun_device_fd_from_path is not utf-8").to_owned()),
+                        #[cfg(all(feature = "local-tun", unix))]
+                        tun_device_fd: local
+                            .tun_device_fd,
+                            //.as_ref()
+                            //.map(|p| p.to_str().expect("tun_device_fd is not RawFd").to_owned()),
 
                         #[cfg(feature = "local")]
                         socks5_auth_config_path: None,

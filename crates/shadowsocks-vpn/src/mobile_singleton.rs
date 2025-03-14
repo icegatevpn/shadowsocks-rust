@@ -28,20 +28,20 @@ impl MobileDeviceManager {
             .map_err(|e| format!("Failed to create runtime: {}", e))?;
 
         // Load config
-        let config = Config::load_from_str(config_str, ConfigType::Local)
-            .map_err(|e| format!("Failed to load config: {}", e))?;
+        // let config = Config::load_from_str(config_str, ConfigType::Local)
+        //     .map_err(|e| format!("Failed to load config: {}", e))?;
 
         // Create TUN device configuration
-        let tun_config = TunDeviceConfig {
-            fd,
-            address: "10.1.10.2/24".parse().unwrap(),
-            destination: Some("0.0.0.0/0".parse().unwrap()),
-            mtu: Some(1500),
-        };
+        // let tun_config = TunDeviceConfig {
+        //     fd,
+        //     address: "10.1.10.2/24".parse().unwrap(),
+        //     destination: Some("0.0.0.0/0".parse().unwrap()),
+        //     mtu: Some(1500),
+        // };
 
         // Create TUN device
         let tun = runtime.block_on(async {
-            MobileTunDevice::new(tun_config, config).await
+            MobileTunDevice::new(fd, config_str).await
                 .map_err(|e| format!("Failed to create TUN device: {:?}", e))
         })?;
 

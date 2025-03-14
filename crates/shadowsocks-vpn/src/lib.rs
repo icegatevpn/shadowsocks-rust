@@ -320,22 +320,22 @@ pub mod ios {
             }
         };
         // Load shadowsocks config
-        let config = match Config::load_from_str(config_str, ConfigType::Local) {
-            Ok(c) => c,
-            Err(e) => {
-                error!("Failed to load config: {}", e);
-                return ptr::null_mut();
-            }
-        };
+        // let config = match Config::load_from_str(config_str, ConfigType::Local) {
+        //     Ok(c) => c,
+        //     Err(e) => {
+        //         error!("Failed to load config: {}", e);
+        //         return ptr::null_mut();
+        //     }
+        // };
 
-        let tun_config = TunDeviceConfig {
-            fd,
-            address: "10.1.10.2/24".parse().unwrap(),
-            destination: Some("0.0.0.0/0".parse().unwrap()),
-            mtu: Some(65536), // was 1500
-        };
+        // let tun_config = TunDeviceConfig {
+        //     fd,
+        //     address: "10.1.10.2/24".parse().unwrap(),
+        //     destination: Some("0.0.0.0/0".parse().unwrap()),
+        //     mtu: Some(65536), // was 1500
+        // };
         // Create TUN device using runtime to handle async operations
-        let tun_device = match runtime.block_on(async { MobileTunDevice::new(tun_config, config).await }) {
+        let tun_device = match runtime.block_on(async { MobileTunDevice::new(tun_config, config_str).await }) {
             Ok(tun) => tun,
             Err(e) => {
                 error!("Failed to create TUN device: {:?}", e);

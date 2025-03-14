@@ -168,9 +168,10 @@ sslocal --protocol tun -s "[::1]:8388" -m "aes-256-gcm" -k "hello-kitty" --outbo
     let config = format!(
         r#"{{
             "server": "209.38.240.26",
-            "server_port": 8765,
+            "server_port": 28954,
             "password": "yJxlMnbXB0fpbQ+YfBwmV4GVr1ndRbsEJXdrJFQNeRE=:aj0Wg39ZA/h6dUuZr60T3kMHRpQQDIivPeSOYi397C4=",
             "method": "2022-blake3-aes-256-gcm",
+            "old_method": "chacha20-ietf-poly1305",
             "mode": "tcp_and_udp",
             "locals": [
                 {{
