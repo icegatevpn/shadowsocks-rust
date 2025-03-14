@@ -14,6 +14,7 @@ use shadowsocks_service::mysql_db::Database;
 use shadowsocks_service::shadowsocks;
 use shadowsocks_service::url_generator::generate_ssurl;
 use std::{collections::HashMap, fmt, sync::Arc};
+use std::net::IpAddr;
 use futures::TryFutureExt;
 use tokio::{
     sync::{oneshot, Mutex},
@@ -503,12 +504,16 @@ pub async fn run_web_service(
         // .route("/metrics/transfer", get(get_metrics))
         .with_state(state);
 
-    let listener = tokio::net::TcpListener::bind(host_name.clone())
+    // let listener = tokio::net::TcpListener::bind(host_name.clone())
+    let default_ip = [0, 0, 0, 0];
+    let ip = IpAddr::from(default_ip);
+    let port = host_name.split(":").last().unwrap_or("8080");
+    let bind_address = format!("{}:{}", ip, port);
+    let listener = tokio::net::TcpListener::bind(&bind_address)
         .await
-        .expect(&format!("Failed to bind to {}", host_name));
+        .expect(&format!("Failed to bind to {}", &bind_address));
 
     let msg = format!("Web service listening on http://{}/{}", host_name, url_key);
-    println!("{}",msg);
     info!("{}", msg);
 
     axum::serve(listener, app).await.expect("Web service failed");

@@ -25,13 +25,13 @@ serde_json = "1.0.134"
 serde = { version = "1.0.217", features = ["derive"] }
 clap = "4.5.32"
 shadowsocks-rust = { path = "../.." }
+signal-hook = "0.3.17"
 # ios
 [target.'cfg(any(target_os = "ios", target_os = "tvos"))'.dependencies]
 oslog = "0.2"
 # Windows::
 async-trait = "0.1"
 #windows-sys = { version = "0.59.0", features = ["Win32_NetworkManagement_IpHelper"] }
-signal-hook = "0.3.17"
 [target.'cfg(windows)'.dependencies]
 ctrlc = "3.4"
 # Android-specific dependencies
