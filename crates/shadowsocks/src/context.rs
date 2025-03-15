@@ -12,6 +12,8 @@ use crate::{
     security::replay::ReplayProtector,
 };
 
+const MAX_PREFIX_LEN: usize = 8;
+
 /// Service context
 #[derive(Debug)]
 pub struct Context {
@@ -59,12 +61,17 @@ impl Context {
         }
     }
     fn gen_printable_prefix(nonce: &mut [u8]) {
-        // TLS ClientHello: "\u0016\u0003\u0001\u0000\u00a8\u0001\u0001"
-        const SECURITY_PRINTABLE_PREFIX_LEN: usize = 8;
-        let prefix: &[u8] = b"%16%03%01%00%C2%A8%01%01";
+        // TLS ClientHello: 16:03:01:00:a8:01:01
+        const PREFIX: &[u8] = &[0x16, 0x03, 0x01, 0x00, 0xa8, 0x01, 0x01];
 
-        if nonce.len() >= SECURITY_PRINTABLE_PREFIX_LEN {
-            nonce[..SECURITY_PRINTABLE_PREFIX_LEN].copy_from_slice(&prefix[..SECURITY_PRINTABLE_PREFIX_LEN]);
+        // Compile-time assertion to check the prefix length
+        const _: () = assert!(
+            PREFIX.len() <= MAX_PREFIX_LEN,
+            "Prefix length exceeds maximum allowed length (8)"
+        );
+
+        if nonce.len() >= PREFIX.len() {
+            nonce[..PREFIX.len()].copy_from_slice(PREFIX);
         }
     }
 
