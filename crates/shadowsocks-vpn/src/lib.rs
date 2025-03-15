@@ -329,7 +329,7 @@ pub mod ios {
         //     mtu: Some(65536), // was 1500
         // };
         // Create TUN device using runtime to handle async operations
-        let tun_device = match runtime.block_on(async { MobileTunDevice::new(tun_config, config_str).await }) {
+        let tun_device = match runtime.block_on(async { MobileTunDevice::new(fd, config_str).await }) {
             Ok(tun) => tun,
             Err(e) => {
                 error!("Failed to create TUN device: {:?}", e);
