@@ -60,7 +60,7 @@ fn main() -> std::io::Result<()> {
     let config = format!(
         r#"{{
             "server": "209.38.240.26",
-            "server_port": 28954,
+            "server_port": 443,
             "password": "yJxlMnbXB0fpbQ+YfBwmV4GVr1ndRbsEJXdrJFQNeRE=:aj0Wg39ZA/h6dUuZr60T3kMHRpQQDIivPeSOYi397C4=",
             "method": "2022-blake3-aes-256-gcm",
             "old_method": "chacha20-ietf-poly1305",

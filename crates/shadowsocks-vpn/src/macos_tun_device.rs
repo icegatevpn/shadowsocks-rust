@@ -9,7 +9,7 @@ use shadowsocks_service::config::ProtocolType;
 use std::io;
 use std::process::Command as ProcessCommand;
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use tokio::sync::{mpsc, Mutex};
 
 #[cfg(target_os = "macos")]
 pub struct MacOSTunDevice {
@@ -17,6 +17,7 @@ pub struct MacOSTunDevice {
     tun_interface: Option<String>,
     running: Arc<Mutex<bool>>,
     original_routes: Arc<Mutex<Option<String>>>,
+    shutdown_signal: Arc<Mutex<Option<mpsc::Sender<()>>>>,
 }
 #[cfg(target_os = "macos")]
 #[derive(Debug, Serialize, Deserialize)]
@@ -34,6 +35,7 @@ impl MacOSTunDevice {
             tun_interface: None,
             running: Arc::new(Mutex::new(false)),
             original_routes: Arc::new(Mutex::new(None)),
+            shutdown_signal: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -95,6 +97,9 @@ impl MacOSTunDevice {
 
         let matches = app.get_matches();
 
+        let (tx, mut rx) = mpsc::channel::<()>(1);
+        self.shutdown_signal = Arc::new(Mutex::new(Some(tx.clone())));
+
         // Create the local service runtime and future
         let (config, runtime, main_fut) = match local::create(&matches, Some(&config_str)) {
             Ok((cf, rt, fut)) => (cf, rt, fut),
@@ -109,19 +114,25 @@ impl MacOSTunDevice {
         let running = self.running.clone();
         std::thread::spawn(move || {
             info!("Starting Shadowsocks service in background thread");
-
-            // This is now safe because we're in a new OS thread
-            match runtime.block_on(main_fut) {
-                Ok(_) => {
-                    info!("Shadowsocks service completed successfully");
+            let combined_fut = async move {
+                tokio::select! {
+                    result = main_fut => {
+                        match result {
+                            Ok(_) => {
+                                info!("Shadowsocks service completed successfully");
+                            }
+                            Err(err) => {
+                                error!("Shadowsocks service error: {}", err);
+                            }
+                        }
+                    }
+                    _ = rx.recv() => {
+                        info!("Shutdown signal received, stopping Shadowsocks service");
+                    }
                 }
-                Err(err) => {
-                    error!("Shadowsocks service error: {}", err);
-                }
-            }
-
-            // Update the running state when the service exits
-            let _ = futures::executor::block_on(async {
+            };
+            runtime.block_on(combined_fut);
+            runtime.block_on(async {
                 *running.lock().await = false;
             });
         });
@@ -504,6 +515,15 @@ impl MacOSTunDevice {
 
     pub async fn stop(&self) -> io::Result<()> {
         debug!("STOPPING...");
+        let mut signal = self.shutdown_signal.lock().await;
+        if let Some(tx) = signal.take() {
+            if let Err(err) = tx.send(()).await {
+                warn!("Failed to send shutdown signal: {}", err);
+            }
+        } else {
+            warn!("No active tunnel to cancel");
+        }
+
         if let Some(interface) = &self.tun_interface {
             self.cleanup_routing(interface).await?;
         }

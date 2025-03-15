@@ -168,7 +168,7 @@ impl MobileTunDevice {
                 let status_clone = self.status.clone();
 
                 // Run in a background thread to allow cancellation
-                let handle = std::thread::spawn(move || {
+                std::thread::spawn(move || {
                     info!("Starting Shadowsocks service in background thread");
 
                     // Create a shutdown-aware future
