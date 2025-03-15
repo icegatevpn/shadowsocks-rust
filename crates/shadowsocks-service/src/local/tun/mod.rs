@@ -140,9 +140,7 @@ impl TunBuilder {
 
     /// Build Tun server
     pub async fn build(mut self) -> io::Result<Tun> {
-        debug!("build!!!!");
         self.tun_config.layer(Layer::L3).up();
-        debug!(" ..... 0");
         // XXX: tun2 set IFF_NO_PI by default.
         //
         // #[cfg(target_os = "linux")]
@@ -150,7 +148,6 @@ impl TunBuilder {
         //     // IFF_NO_PI preventing excessive buffer reallocating
         //     tun_config.packet_information(false);
         // });
-        debug!("!! tun config: {:?}", self.tun_config);
         let device = match create_as_async(&self.tun_config) {
             Ok(d) => d,
             Err(TunError::Io(err)) => {
@@ -162,20 +159,16 @@ impl TunBuilder {
                 return Err(io::Error::new(ErrorKind::Other, err))
             },
         };
-        debug!("..... 1");
         let (udp, udp_cleanup_interval, udp_keepalive_rx) = UdpTun::new(
             self.context.clone(),
             self.balancer.clone(),
             self.udp_expiry_duration,
             self.udp_capacity,
         );
-        debug!("..... 2");
         let tcp = TcpTun::new(self.context, self.balancer, device.mtu().unwrap_or(1500) as u32);
-        debug!("..... 3");
-        // let arc_device = Arc::new(Mutex::new(device));
 
         Ok(Tun {
-            device,//arc_device,
+            device,
             tcp,
             udp,
             udp_cleanup_interval,
@@ -188,7 +181,7 @@ impl TunBuilder {
 
 /// Tun service
 pub struct Tun {
-    device: AsyncDevice,//Arc<Mutex<AsyncDevice>>,
+    device: AsyncDevice,
     net_helper: Option<Arc<dyn DeviceNetHelper>>,
     tcp: TcpTun,
     udp: UdpTun,
@@ -201,11 +194,6 @@ impl Tun {
     /// Start serving
     pub fn interface_name(&self) -> io::Result<String> {
         self.device.tun_name().map_err(From::from)
-        // block_on(async move {
-        //     // let lock = self.device.lock().await;
-        //     // lock.tun_name()
-        //     self.device.tun_name().expect("TODO: panic message");
-        // }).map_err(From::from)
     }
 
     pub async fn run(mut self) -> io::Result<()> {

@@ -1,5 +1,9 @@
 //! Local server launchers
 
+use clap::{builder::PossibleValuesParser, Arg, ArgAction, ArgGroup, ArgMatches, Command, ValueHint};
+use futures::future::{self, FutureExt};
+use log::{debug, error, info, trace};
+use std::os::fd::RawFd;
 #[cfg(unix)]
 use std::sync::Arc;
 use std::{
@@ -9,10 +13,6 @@ use std::{
     process::ExitCode,
     time::{Duration, Instant},
 };
-use std::os::fd::RawFd;
-use clap::{builder::PossibleValuesParser, Arg, ArgAction, ArgGroup, ArgMatches, Command, ValueHint};
-use futures::future::{self, FutureExt};
-use log::{debug, error, info, trace};
 use tokio::{
     self,
     runtime::{Builder, Runtime},
@@ -41,7 +41,8 @@ use crate::logging;
 use crate::{
     config::{Config as ServiceConfig, RuntimeMode},
     error::{ShadowsocksError, ShadowsocksResult},
-    monitor, vparser,
+    monitor,
+    vparser,
 };
 
 #[cfg(feature = "local-dns")]
@@ -620,30 +621,38 @@ pub fn create(matches: &ArgMatches, config_str: Option<&str>) -> ShadowsocksResu
         service_config.set_options(matches);
 
         #[cfg(feature = "logging")]
-        match service_config.log.config_path {
-            Some(ref path) => {
-                logging::init_with_file(path);
+        {
+            let mut do_logging = true;
+            match config_str {
+                Some(c) => {
+                    if c.contains("rust_log_lvl") {
+                        trace!("rust_log_lvl set, skip logging init...");
+                        do_logging = false;
+                    }
+                }
+                None => {}
             }
-            None => {
-                logging::init_with_config("sslocal", &service_config.log);
+
+            if do_logging {
+                match service_config.log.config_path {
+                    Some(ref path) => {
+                        logging::init_with_file(path);
+                    }
+                    None => {
+                        logging::init_with_config("sslocal", &service_config.log);
+                    }
+                }
             }
         }
-        debug!("<<<< {:?}", service_config);
 
         let mut config = match config_path_opt {
             Some(cpath) => Config::load_from_file(&cpath, ConfigType::Local)
                 .map_err(|err| ShadowsocksError::LoadConfigFailure(format!("loading config {cpath:?}, {err}")))?,
-            None => {
-                match config_str {
-                    Some(c) => {
-                        Config::load_from_str(c, ConfigType::Local)
-                            .map_err(|err| ShadowsocksError::LoadConfigFailure(format!("loading config {c:?}, {err}")))?
-                    }
-                    None => {
-                        Config::new(ConfigType::Local)
-                    }
-                }
-            }
+            None => match config_str {
+                Some(c) => Config::load_from_str(c, ConfigType::Local)
+                    .map_err(|err| ShadowsocksError::LoadConfigFailure(format!("loading config {c:?}, {err}")))?,
+                None => Config::new(ConfigType::Local),
+            },
         };
 
         if let Some(svr_addr) = matches.get_one::<String>("SERVER_ADDR") {
@@ -970,8 +979,11 @@ pub fn create(matches: &ArgMatches, config_str: Option<&str>) -> ShadowsocksResu
         // DONE READING options
 
         if config.local.is_empty() {
-            return Err(ShadowsocksError::InsufficientParams("missing `local_address`, consider specifying it by --local-addr command line option, \
-                    or \"local_address\" and \"local_port\" in configuration file".to_string()));
+            return Err(ShadowsocksError::InsufficientParams(
+                "missing `local_address`, consider specifying it by --local-addr command line option, \
+                    or \"local_address\" and \"local_port\" in configuration file"
+                    .to_string(),
+            ));
         }
 
         config

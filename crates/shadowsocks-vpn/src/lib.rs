@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 
 #[cfg(any(target_os = "android", target_os = "ios", target_os = "tvos"))]
-mod mobile_singleton;
+mod mobile_device_manager;
 #[cfg(any(target_os = "ios", target_os = "tvos"))]
 use std::ffi::c_longlong;
 
@@ -27,15 +27,13 @@ pub mod windows_tun_device;
 #[cfg(not(target_os = "android"))]
 use log::{debug, error};
 #[cfg(not(target_os = "android"))]
-use std::ptr::{self};
+use std::ffi::{c_char, CStr, CString};
 #[cfg(not(target_os = "android"))]
-use std::{
-    ffi::{c_char, CStr, CString},
-};
+use std::ptr::{self};
 use tokio::runtime::Runtime;
 
 #[cfg(any(target_os = "android", target_os = "ios", target_os = "tvos"))]
-use crate::mobile_singleton::MobileDeviceManager;
+use crate::mobile_device_manager::MobileDeviceManager;
 #[cfg(any(target_os = "android", target_os = "ios", target_os = "tvos"))]
 use crate::mobile_tun_device::MobileTunDevice;
 
@@ -224,10 +222,7 @@ pub extern "C" fn vpn_destroy(context: *mut VpnContext) {
 }
 #[cfg(any(target_os = "ios", target_os = "tvos"))]
 #[no_mangle]
-pub unsafe extern "C" fn create_vpn(
-    config_json: *const c_char,
-    fd: i32
-) -> *mut VpnContext {
+pub unsafe extern "C" fn create_vpn(config_json: *const c_char, fd: i32) -> *mut VpnContext {
     ios::create_vpn(config_json, fd)
 }
 
@@ -254,13 +249,13 @@ pub mod ios {
     use crate::mobile_tun_device::{MobileTunDevice, TunDeviceConfig, VPNStatus, VPNStatusCode};
     use crate::VpnContext;
     use crate::VpnError;
+    use futures::executor::block_on;
     use log::{debug, error, LevelFilter};
+    use oslog::OsLogger;
     use shadowsocks::context::Context;
     use shadowsocks_service::config::{Config, ConfigType};
     use std::ffi::{c_char, c_longlong, CStr};
     use std::ptr;
-    use futures::executor::block_on;
-    use oslog::OsLogger;
     use tokio::runtime::Runtime;
 
     #[derive(Debug)]
@@ -268,7 +263,7 @@ pub mod ios {
         NullPointer(String),
         InvalidUtf8(String),
     }
-    pub fn test_logging(){
+    pub fn test_logging() {
         init_logging();
         debug!("test_logging....");
     }
@@ -279,8 +274,7 @@ pub mod ios {
 
         INIT.call_once(|| {
             // Create logger with subsystem and category
-            let logger = OsLogger::new("com.IceGate.vpn")
-                .level_filter(LevelFilter::Trace); // Set minimum log level
+            let logger = OsLogger::new("com.IceGate.vpn").level_filter(LevelFilter::Trace); // Set minimum log level
 
             // Set as global logger
             log::set_boxed_logger(Box::new(logger))
@@ -380,7 +374,6 @@ pub mod ios {
             let status = context.tun_device.get_status_async().await;
             status.code.tou8() as c_longlong
         })
-
     }
 }
 
@@ -471,9 +464,16 @@ pub mod android {
         _: JClass,
         _: jlong,
     ) -> jboolean {
+        info!("Stopping VPN service from JNI");
         match futures::executor::block_on(async { MobileDeviceManager::stop().await }) {
-            Ok(_) => true as jboolean,
-            Err(_) => false as jboolean,
+            Ok(_) => {
+                info!("VPN service successfully stopped");
+                true as jboolean
+            }
+            Err(e) => {
+                error!("Failed to stop VPN service: {}", e);
+                false as jboolean
+            }
         }
     }
 }

@@ -326,10 +326,10 @@ impl Manager {
 
                 ManagerRequest::RemoveUser(ref req) => match self.handle_remove_user(req).await {
                     Ok(r) => {
-                        warn!("<<<<<< removed user: {:?}", r);
+                        info!("Removed user: {:?}", r);
                     }
                     Err(e) => {
-                        warn!("<<<<<< removed user failed: {}", e);
+                        warn!("Removed user failed: {}", e);
                     }
                 }
             }
