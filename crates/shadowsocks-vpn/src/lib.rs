@@ -234,6 +234,14 @@ pub unsafe extern "C" fn start_vpn(context: *mut VpnContext) -> c_longlong {
 
 #[cfg(any(target_os = "ios", target_os = "tvos"))]
 #[no_mangle]
+pub unsafe extern "C" fn stop_vpn(context: *mut VpnContext) -> c_longlong {
+    error!("<<< STOP THIS!!");
+    // ios::stop_vpn(context).unwrap_or_else(|e| -1)
+    7
+}
+
+#[cfg(any(target_os = "ios", target_os = "tvos"))]
+#[no_mangle]
 pub unsafe extern "C" fn get_status(context: *mut VpnContext) -> c_longlong {
     ios::get_status(context)
 }
@@ -262,6 +270,7 @@ pub mod ios {
     pub enum VPNError {
         NullPointer(String),
         InvalidUtf8(String),
+        Other(&'static str),
     }
     pub fn test_logging() {
         init_logging();
@@ -313,21 +322,7 @@ pub mod ios {
                 return ptr::null_mut();
             }
         };
-        // Load shadowsocks config
-        // let config = match Config::load_from_str(config_str, ConfigType::Local) {
-        //     Ok(c) => c,
-        //     Err(e) => {
-        //         error!("Failed to load config: {}", e);
-        //         return ptr::null_mut();
-        //     }
-        // };
 
-        // let tun_config = TunDeviceConfig {
-        //     fd,
-        //     address: "10.1.10.2/24".parse().unwrap(),
-        //     destination: Some("0.0.0.0/0".parse().unwrap()),
-        //     mtu: Some(65536), // was 1500
-        // };
         // Create TUN device using runtime to handle async operations
         let tun_device = match runtime.block_on(async { MobileTunDevice::new(fd, config_str).await }) {
             Ok(tun) => tun,
@@ -366,6 +361,27 @@ pub mod ios {
         });
 
         Ok(VPNStatusCode::Connecting.tou8() as i64)
+    }
+
+    // todo haven't quite got working yet
+    pub unsafe fn stop_vpn(context: *mut VpnContext) -> Result<i64, VPNError> {
+        let context = &mut *context;
+        // let runtime_handle = context.runtime.handle().clone();
+        // runtime_handle.spawn(async move {
+        // runtime_handle.block_on(async {
+        block_on(async {
+            debug!("<<< stopping TUN device...");
+            match context.tun_device.cancel().await {
+                Ok(_) => {
+                    debug!("<< TUN stopped successfully");
+                    Ok(VPNStatusCode::Started.tou8() as i64)
+                }
+                Err(e) => {
+                    error!("<< Failed to stop TUN device: {:?}", e);
+                    Err(VPNError::Other("<<< Failed to stop Shadowsocks service"))
+                }
+            }
+        })
     }
 
     pub unsafe fn get_status(context: *mut VpnContext) -> c_longlong {
