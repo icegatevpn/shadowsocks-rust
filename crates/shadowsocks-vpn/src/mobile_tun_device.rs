@@ -1,4 +1,4 @@
-use crate::mobile_tun_device::TunError::{DeviceError};
+use crate::mobile_tun_device::TunError::DeviceError;
 use clap::Command;
 use futures::executor::block_on;
 use futures::future::err;
@@ -107,6 +107,12 @@ impl MobileTunDevice {
         let mut config: Value = serde_json::from_str(config_json)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("Invalid JSON: {}", e)))?;
         // Handle different config formats
+        if cfg!(target_os = "ios") || cfg!(target_os = "tvos") {
+            // I don't know how to add this to the json in swift,
+            // this just prevents local from initializing logging again, which crashes the service
+            config["rust_log_lvl"] = json!("none");
+        }
+
         if let Some(locals) = config.get_mut("locals").and_then(Value::as_array_mut) {
             // Config format with "locals" array
             let mut found_tun = false;
