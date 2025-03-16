@@ -3,7 +3,7 @@
 # /*
 #   Requires the Android NDK installed:
 #   https://developer.android.com/ndk/downloads
-#   Onse installed, use below command to set ANDROID_NDK_HOME
+#   Once installed, use below command to set ANDROID_NDK_HOME
 #   export ANDROID_NDK_HOME=~/Library/Android/sdk/ndk/27.0.12077973
 # 
 #   This uses Cargo NDK to build Android images: https://docs.rs/crate/cargo-ndk/0.6.1
