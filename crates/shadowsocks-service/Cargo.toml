@@ -182,7 +182,7 @@ flate2 = { version = "1.0", optional = true }
 brotli = { version = "7.0", optional = true }
 zstd = { version = "0.13", optional = true }
 
-tun = {git = "https://github.com/icegatevpn/rust-tun", branch = "work",  optional = true, features = ["async"]}
+tun = {git = "https://github.com/icegatevpn/rust-tun", version = "0.7.15", branch = "work",  optional = true, features = ["async"]}
 etherparse = { version = "0.17", optional = true }
 smoltcp = { version = "0.12", optional = true, default-features = false, features = [
     "std",
