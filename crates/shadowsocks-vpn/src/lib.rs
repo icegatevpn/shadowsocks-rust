@@ -24,12 +24,15 @@ mod mobile_tun_device;
 #[cfg(target_os = "windows")]
 pub mod windows_tun_device;
 
+use log::LevelFilter;
 #[cfg(not(target_os = "android"))]
 use log::{debug, error};
+use serde_json::Value;
 #[cfg(not(target_os = "android"))]
 use std::ffi::{c_char, CStr, CString};
 #[cfg(not(target_os = "android"))]
 use std::ptr::{self};
+use std::str::FromStr;
 use tokio::runtime::Runtime;
 
 #[cfg(any(target_os = "android", target_os = "ios", target_os = "tvos"))]
@@ -255,10 +258,10 @@ pub extern "C" fn test_logging() {
 #[cfg(any(target_os = "ios", target_os = "tvos"))]
 pub mod ios {
     use crate::mobile_tun_device::{MobileTunDevice, TunDeviceConfig, VPNStatus, VPNStatusCode};
-    use crate::VpnContext;
     use crate::VpnError;
+    use crate::{get_log_lvl, VpnContext};
     use futures::executor::block_on;
-    use log::{debug, error, LevelFilter};
+    use log::{debug, error, warn, LevelFilter};
     use oslog::OsLogger;
     use shadowsocks::context::Context;
     use shadowsocks_service::config::{Config, ConfigType};
@@ -273,21 +276,21 @@ pub mod ios {
         Other(&'static str),
     }
     pub fn test_logging() {
-        init_logging();
-        debug!("test_logging....");
+        init_logging(&"".to_string());
     }
 
-    fn init_logging() {
+    fn init_logging(config: &str) {
         // Initialize once
         static INIT: std::sync::Once = std::sync::Once::new();
 
         INIT.call_once(|| {
             // Create logger with subsystem and category
-            let logger = OsLogger::new("com.IceGate.vpn").level_filter(LevelFilter::Trace); // Set minimum log level
+            let lvl = get_log_lvl(config);
+            let logger = OsLogger::new("com.IceGate.vpn").level_filter(lvl);
 
             // Set as global logger
             log::set_boxed_logger(Box::new(logger))
-                .map(|()| log::set_max_level(LevelFilter::Trace))
+                .map(|()| log::set_max_level(lvl))
                 .expect("Failed to initialize logging");
         });
     }
@@ -307,13 +310,10 @@ pub mod ios {
             }
         }};
     }
-
     pub fn create_vpn(config_json: *const c_char, fd: i32) -> *mut VpnContext {
-        init_logging();
-
         debug!("Creating VPN");
         let config_str = c_str!(config_json).expect("failed to parse config");
-
+        init_logging(config_str);
         // Create runtime for async operations
         let runtime = match Runtime::new() {
             Ok(rt) => rt,
@@ -341,13 +341,13 @@ pub mod ios {
 
         Box::into_raw(context)
     }
+
     pub unsafe fn start_vpn(context: *mut VpnContext) -> Result<i64, VPNError> {
         let context = &mut *context;
         let runtime_handle = context.runtime.handle().clone();
-
         // Spawn the tunnel task into the background
         runtime_handle.spawn(async move {
-            debug!("Starting TUN device in background task");
+            debug!("Starting TUN device in background task ....");
             match context.tun_device.start_tunnel().await {
                 Ok(_) => {
                     debug!("TUN tunnel completed successfully");
@@ -366,9 +366,6 @@ pub mod ios {
     // todo haven't quite got working yet
     pub unsafe fn stop_vpn(context: *mut VpnContext) -> Result<i64, VPNError> {
         let context = &mut *context;
-        // let runtime_handle = context.runtime.handle().clone();
-        // runtime_handle.spawn(async move {
-        // runtime_handle.block_on(async {
         block_on(async {
             debug!("<<< stopping TUN device...");
             match context.tun_device.cancel().await {
@@ -393,6 +390,14 @@ pub mod ios {
     }
 }
 
+fn get_log_lvl(config: &str) -> LevelFilter {
+    let v: Value = match serde_json::from_str(config) {
+        Ok(v) => v,
+        Err(_) => return LevelFilter::Debug,
+    };
+    LevelFilter::from_str(v["rust_log_lvl"].as_str().unwrap_or("Debug")).unwrap_or(LevelFilter::Debug)
+}
+
 #[cfg(target_os = "android")]
 pub mod android {
     use super::*;
@@ -400,7 +405,6 @@ pub mod android {
     use jni::sys::{jboolean, jint, jlong};
     use jni::JNIEnv;
     use log::{debug, error, info, LevelFilter};
-    use std::str::FromStr;
 
     pub fn init_logging(level: Option<LevelFilter>) {
         let level = level.unwrap_or_else(|| LevelFilter::Debug);
@@ -413,13 +417,6 @@ pub mod android {
     }
 
     use serde_json::Value;
-    fn get_log_lvl(config: &String) -> LevelFilter {
-        let v: Value = match serde_json::from_str(config) {
-            Ok(v) => v,
-            Err(_) => return LevelFilter::Debug,
-        };
-        LevelFilter::from_str(v["rust_log_lvl"].as_str().unwrap_or("Debug")).unwrap_or(LevelFilter::Debug)
-    }
 
     #[no_mangle]
     pub extern "system" fn Java_com_icegatevpn_client_vpn_IcegateVpnService_create(

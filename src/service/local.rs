@@ -25,7 +25,12 @@ use shadowsocks_service::shadowsocks::relay::socks5::Address;
 use shadowsocks_service::{
     acl::AccessControl,
     config::{
-        read_variable_field_value, Config, ConfigType, LocalConfig, LocalInstanceConfig, ProtocolType,
+        read_variable_field_value,
+        Config,
+        ConfigType,
+        LocalConfig,
+        LocalInstanceConfig,
+        ProtocolType,
         ServerInstanceConfig,
     },
     local::{loadbalancing::PingBalancer, Server},
@@ -587,35 +592,34 @@ pub fn define_command_line_options(mut app: Command) -> Command {
 }
 
 /// Create `Runtime` and `main` entry
-pub fn create(matches: &ArgMatches, config_str: Option<&str>) -> ShadowsocksResult<(Config, Runtime, impl Future<Output=ShadowsocksResult>)> {
+pub fn create(
+    matches: &ArgMatches,
+    config_str: Option<&str>,
+) -> ShadowsocksResult<(Config, Runtime, impl Future<Output = ShadowsocksResult>)> {
     #[cfg_attr(not(feature = "local-online-config"), allow(unused_mut))]
     let (config, _, runtime) = {
         let config_path_opt = matches.get_one::<PathBuf>("CONFIG").cloned().or_else(|| {
             if !matches.contains_id("SERVER_CONFIG") {
                 match crate::config::get_default_config_path("local.json") {
-                    None => { None }
+                    None => None,
                     Some(p) => {
                         debug!("loading default config {p:?}");
                         Some(p)
                     }
                 }
-            } else { None }
+            } else {
+                None
+            }
         });
 
         let mut service_config = match config_path_opt {
             Some(ref config_path) => ServiceConfig::load_from_file(config_path)
                 .map_err(|err| ShadowsocksError::LoadConfigFailure(format!("loading config {config_path:?}, {err}")))?,
-            None => {
-                match config_str {
-                    Some(c) => {
-                        ServiceConfig::load_from_str(c)
-                            .map_err(|err| ShadowsocksError::LoadConfigFailure(format!("loading config {c:?}, {err}")))?
-                    }
-                    None => {
-                        ServiceConfig::default()
-                    }
-                }
-            }
+            None => match config_str {
+                Some(c) => ServiceConfig::load_from_str(c)
+                    .map_err(|err| ShadowsocksError::LoadConfigFailure(format!("loading config {c:?}, {err}")))?,
+                None => ServiceConfig::default(),
+            },
         };
 
         service_config.set_options(matches);
@@ -1034,8 +1038,8 @@ pub fn create(matches: &ArgMatches, config_str: Option<&str>) -> ShadowsocksResu
                 config_path: config_path.clone(),
                 balancer: instance.server_balancer().clone(),
             }
-                .launch_reload_server_task()
-                .boxed(),
+            .launch_reload_server_task()
+            .boxed(),
             None => future::pending().boxed(),
         };
 

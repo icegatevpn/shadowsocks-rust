@@ -112,7 +112,6 @@ impl MobileTunDevice {
             // this just prevents local from initializing logging again, which crashes the service
             config["rust_log_lvl"] = json!("none");
         }
-
         if let Some(locals) = config.get_mut("locals").and_then(Value::as_array_mut) {
             // Config format with "locals" array
             let mut found_tun = false;
@@ -142,7 +141,6 @@ impl MobileTunDevice {
             error!("Failed to update config: {}", err);
             TunError::ConfigError("Failed to update config")
         })?;
-        debug!("Using Config: {:?}", updated_config);
         Ok(MobileTunDevice {
             config: updated_config,
             status: Arc::new(Mutex::new(VPNStatus::new(VPNStatusCode::Started, None))),
@@ -151,9 +149,7 @@ impl MobileTunDevice {
     }
 
     pub async fn start_tunnel(&self) -> Result<(), TunError> {
-        info!("Starting TUN tunnel");
         self.update_status(VPNStatus::connecting()).await;
-
         // First, create the shutdown channel
         let (tx, mut rx) = mpsc::channel::<()>(1);
         // Store the sender for cancellation
@@ -161,19 +157,16 @@ impl MobileTunDevice {
             let mut signal = self.shutdown_signal.lock().await;
             *signal = Some(tx);
         }
-
         let mut app = Command::new("shadowsocks").version(VERSION);
         app = local::define_command_line_options(app);
 
-        let matches = app.get_matches();
-
+        let matches = app
+            .try_get_matches_from::<_, &str>(vec!["shadowsocks"])
+            .expect("no matches :(");
         let create_result = local::create(&matches, Some(&self.config));
         match create_result {
             Ok((config, runtime, main_fut)) => {
-                // Wrap the main future in a cancellable task
                 let status_clone = self.status.clone();
-
-                // Run in a background thread to allow cancellation
                 std::thread::spawn(move || {
                     info!("Starting Shadowsocks service in background thread");
 
@@ -202,7 +195,6 @@ impl MobileTunDevice {
 
                     // Run the combined future in the runtime
                     let final_status = runtime.block_on(combined_fut);
-
                     // Update status after completion
                     runtime.block_on(async {
                         let mut status = status_clone.lock().await;
@@ -221,10 +213,10 @@ impl MobileTunDevice {
                 Ok(())
             }
             Err(err) => {
-                let err_msg = format!("Failed to create Shadowsocks service: {}", err);
+                let err_msg = format!("<<< Failed to create Shadowsocks service: {}", err);
                 error!("{}", err_msg);
                 self.update_status(VPNStatus::error(&err_msg)).await;
-                Err(TunError::DeviceError("Failed to create Shadowsocks service"))
+                Err(TunError::DeviceError("<<< Failed to create Shadowsocks service"))
             }
         }
     }
