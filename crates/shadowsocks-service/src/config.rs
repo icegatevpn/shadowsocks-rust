@@ -56,6 +56,7 @@ use std::{
     string::ToString,
     time::Duration,
 };
+#[cfg(all(feature = "local-tun", unix))]
 use std::os::fd::RawFd;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE;

@@ -3,6 +3,7 @@
 use clap::{builder::PossibleValuesParser, Arg, ArgAction, ArgGroup, ArgMatches, Command, ValueHint};
 use futures::future::{self, FutureExt};
 use log::{debug, error, info, trace};
+#[cfg(unix)]
 use std::os::fd::RawFd;
 #[cfg(unix)]
 use std::sync::Arc;

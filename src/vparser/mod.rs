@@ -3,7 +3,6 @@
 #![allow(dead_code)]
 
 use std::net::{IpAddr, SocketAddr};
-use std::os::fd::RawFd;
 #[cfg(any(feature = "local-tun", feature = "local-fake-dns"))]
 use ipnet::IpNet;
 #[cfg(feature = "local-redir")]
