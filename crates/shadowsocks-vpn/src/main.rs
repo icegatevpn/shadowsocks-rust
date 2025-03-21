@@ -54,14 +54,13 @@ fn main() -> std::io::Result<()> {
         })
         .expect("Error setting Ctrl-C handler");
     }
-
+    
     let config = format!(
         r#"{{
             "server": "45.86.229.176",
             "server_port": 443,
             "password": "yJxlMnbXB0fpbQ+YfBwmV4GVr1ndRbsEJXdrJFQNeRE=:aj0Wg39ZA/h6dUuZr60T3kMHRpQQDIivPeSOYi397C4=",
             "method": "2022-blake3-aes-256-gcm",
-            "old_method": "chacha20-ietf-poly1305",
             "mode": "tcp_and_udp",
             "locals": [
                 {{
@@ -70,19 +69,17 @@ fn main() -> std::io::Result<()> {
                     "local_port": 1086,
                     "mode": "tcp_and_udp",
                     "tun_interface_name": "utun666",
-                    "tun_interface_address": "10.13.2.1/24"
+                    "tun_interface_address": "10.0.0.1/24"
                 }},
                 {{
-                  "local_address": "127.0.0.1",
-                  "local_port": 5450,
-                  "local_dns_address": "114.114.114.114",
-                  "local_dns_port": 53,
-                  "remote_dns_address": "8.8.8.8",
-                  "remote_dns_port": 53,
-                  "protocol": "dns"
-                }}
+                    "protocol":"dns",
+                    "local_address": "127.0.0.1",
+                    "local_port": 5450,
+                    "local_dns_address": "local_dns_path",
+                    "remote_dns_address": "dns.google",
+                    "remote_dns_port": 53
+	            }}
             ],
-            "dns": "8.8.8.8,8.8.4.4",
             "no_delay": true,
             "keep_alive": 15,
             "timeout": 300,

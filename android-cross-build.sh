@@ -22,8 +22,8 @@ if [ -z "$BASH_VERSION" ]; then
 fi
 
 # Build targets
-#TARGETS="x86_64-linux-android aarch64-linux-android armv7-linux-androideabi i686-linux-android"
-TARGETS="aarch64-linux-android"
+TARGETS="x86_64-linux-android aarch64-linux-android armv7-linux-androideabi i686-linux-android"
+#TARGETS="aarch64-linux-android"
 declare -A ABI_MAP
 ABI_MAP["x86_64-linux-android"]="x86_64"
 ABI_MAP["aarch64-linux-android"]="arm64-v8a"
