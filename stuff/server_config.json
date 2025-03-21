@@ -3,8 +3,8 @@
   "manager_tcp_port": 8080,
   "servers": [
     {
-    "server": "46.249.38.167",
-    "server_port": 8488,
+    "server": "45.86.229.176",
+    "server_port": 443,
     "password": "yJxlMnbXB0fpbQ+YfBwmV4GVr1ndRbsEJXdrJFQNeRE=",
     "method": "2022-blake3-aes-256-gcm",
     "mode": "tcp_and_udp",
