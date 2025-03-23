@@ -26,10 +26,11 @@ pub mod windows_tun_device;
 
 use log::LevelFilter;
 #[cfg(not(target_os = "android"))]
-use log::{debug, error};
+use log::error;
 use serde_json::Value;
 #[cfg(not(target_os = "android"))]
-use std::ffi::{c_char, CStr, CString};
+use std::ffi::{c_char, CString};
+use std::ffi::CStr;
 #[cfg(not(target_os = "android"))]
 use std::ptr::{self};
 use std::str::FromStr;
@@ -47,6 +48,7 @@ use crate::windows_tun_device::WindowsTunDevice;
 
 // Opaque type for the VPN context
 use tokio::task::JoinHandle;
+use shadowsocks_service::my_debug;
 
 // Opaque type for the VPN context
 #[repr(C)]
@@ -157,7 +159,7 @@ pub extern "C" fn vpn_start(context: *mut VpnContext) -> bool {
     context.runtime.spawn(async move {
         match handle.await {
             Ok(Ok(_)) => {
-                debug!("VPN service running successfully");
+                my_debug!("VPN service running successfully");
             }
             Ok(Err(e)) => {
                 let err_msg = format!("VPN service error: {:?}", e);
@@ -232,7 +234,7 @@ pub unsafe extern "C" fn create_vpn(config_json: *const c_char, fd: i32) -> *mut
 #[cfg(any(target_os = "ios", target_os = "tvos"))]
 #[no_mangle]
 pub unsafe extern "C" fn start_vpn(context: *mut VpnContext) -> c_longlong {
-    ios::start_vpn(context).unwrap_or_else(|e| -1)
+    ios::start_vpn(context).unwrap_or_else(|_| -1)
 }
 
 #[cfg(any(target_os = "ios", target_os = "tvos"))]
@@ -257,13 +259,12 @@ pub extern "C" fn test_logging() {
 
 #[cfg(any(target_os = "ios", target_os = "tvos"))]
 pub mod ios {
-    use crate::mobile_tun_device::{MobileTunDevice, TunDeviceConfig, VPNStatus, VPNStatusCode};
+    use crate::mobile_tun_device::{MobileTunDevice, VPNStatusCode};
     use crate::{get_log_lvl, VpnContext};
     use futures::executor::block_on;
-    use log::{LevelFilter};
     use oslog::OsLogger;
-    use shadowsocks_service::{my_debug, my_error, my_warn};
-    use std::ffi::{c_char, c_longlong, CStr};
+    use shadowsocks_service::{my_debug, my_error};
+    use std::ffi::{c_char, c_longlong};
     use std::ptr;
     use tokio::runtime::Runtime;
 

@@ -18,5 +18,3 @@ pub const BUILD_TIME: &str = build_time::build_time_utc!();
 
 /// shadowsocks version
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
-
-const TAG: &str = "<<";

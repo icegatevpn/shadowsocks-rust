@@ -68,8 +68,8 @@ use ipnet::IpNet;
 #[cfg(feature = "local-fake-dns")]
 use ipnet::{Ipv4Net, Ipv6Net};
 use log::warn;
-use rand::{RngCore, TryRngCore};
 use rand::rngs::OsRng;
+use rand::TryRngCore;
 use serde::{Deserialize, Serialize};
 #[cfg(any(feature = "local-tunnel", feature = "local-dns"))]
 use shadowsocks::relay::socks5::Address;

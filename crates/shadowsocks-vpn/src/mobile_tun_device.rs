@@ -1,23 +1,12 @@
-use crate::mobile_tun_device::TunError::DeviceError;
 use clap::Command;
-use futures::executor::block_on;
-use futures::future::err;
 use ipnet::IpNet;
 use serde_json::{json, Value};
-use shadowsocks::config::Mode;
 use shadowsocks::relay::udprelay::DatagramReceiveExt;
 use shadowsocks_rust::service::local;
 use shadowsocks_rust::VERSION;
-use shadowsocks_service::config::Config;
-use shadowsocks_service::local::context::ServiceContext;
-use shadowsocks_service::local::loadbalancing::PingBalancerBuilder;
-use shadowsocks_service::local::tun::{StaticDeviceNetHelper, TunBuilder};
 use shadowsocks_service::{my_debug, my_error, my_info, my_warn};
-use std::fmt::{format, Debug};
-use std::os::fd::RawFd;
-use std::thread::JoinHandle;
+use std::fmt::{Debug};
 use std::{io, sync::Arc};
-use tokio::sync::mpsc::error::SendError;
 use tokio::sync::{mpsc, Mutex};
 
 #[derive(Debug)]

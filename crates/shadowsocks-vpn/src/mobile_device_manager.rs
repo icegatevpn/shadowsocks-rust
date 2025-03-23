@@ -4,15 +4,14 @@ use tokio::runtime::Runtime;
 use tokio::sync::{Mutex, oneshot};
 use log::{debug, error, info, warn};
 
-use crate::mobile_tun_device::{MobileTunDevice, TunDeviceConfig, VPNStatus, VPNStatusCode};
-use shadowsocks_service::config::{Config, ConfigType};
+use crate::mobile_tun_device::{MobileTunDevice, VPNStatus, VPNStatusCode};
 
-struct VpnState {
+pub struct VpnState {
     runtime: Runtime,
     tun_device: MobileTunDevice,
     shutdown_tx: Option<oneshot::Sender<()>>,
 }
-static INSTANCE: OnceCell<Arc<Mutex<Option<VpnState>>>> = OnceCell::new();
+pub static INSTANCE: OnceCell<Arc<Mutex<Option<VpnState>>>> = OnceCell::new();
 
 pub struct MobileDeviceManager;
 
