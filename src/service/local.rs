@@ -630,7 +630,7 @@ pub fn create(
             let mut do_logging = true;
             match config_str {
                 Some(c) => {
-                    if c.contains("rust_log_lvl") {
+                    if c.contains("rust_log_lvl") || cfg!(target_os = "tvos") {
                         trace!("rust_log_lvl set, skip logging init...");
                         do_logging = false;
                     }

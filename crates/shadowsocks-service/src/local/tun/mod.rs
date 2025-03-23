@@ -1,5 +1,11 @@
 //! Shadowsocks Local server serving on a Tun interface
 
+use byte_string::ByteStr;
+use cfg_if::cfg_if;
+use ipnet::IpNet;
+use log::{debug, error, info, trace, warn};
+use shadowsocks::config::Mode;
+use smoltcp::wire::{IpProtocol, TcpPacket, UdpPacket};
 #[cfg(unix)]
 use std::os::unix::io::RawFd;
 use std::{
@@ -8,12 +14,6 @@ use std::{
     sync::Arc,
     time::Duration,
 };
-use byte_string::ByteStr;
-use cfg_if::cfg_if;
-use ipnet::IpNet;
-use log::{debug, error, info, trace, warn};
-use shadowsocks::config::Mode;
-use smoltcp::wire::{IpProtocol, TcpPacket, UdpPacket};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     sync::mpsc,
@@ -22,6 +22,7 @@ use tokio::{
 
 cfg_if! {
     if #[cfg(any(target_os = "ios",
+                 target_os = "tvos",
                  target_os = "macos",
                  target_os = "linux",
                  target_os = "android",
@@ -46,7 +47,6 @@ mod ip_packet;
 mod tcp;
 mod udp;
 mod virt_device;
-
 
 pub trait DeviceNetHelper: Send + Sync {
     fn address(&self) -> io::Result<IpAddr>;
@@ -102,18 +102,20 @@ impl TunBuilder {
     }
 
     pub fn address(&mut self, addr: IpNet) {
-        debug!("!!!!!! set addr: {:?}, {:?}", addr, addr.netmask());
         self.tun_config.address(addr.addr()).netmask(addr.netmask());
     }
     // Add method to set the network helper
     pub fn with_net_helper<H: DeviceNetHelper + 'static>(&mut self, helper: H) -> &mut Self {
-        info!(" ****** net helper: {}: {}", helper.address().unwrap(), helper.netmask().unwrap());
+        info!(
+            " ****** net helper: {}: {}",
+            helper.address().unwrap(),
+            helper.netmask().unwrap()
+        );
         self.net_helper = Some(Arc::new(helper));
         self
     }
 
     pub fn destination(&mut self, addr: IpNet) {
-        info!("something here!");
         self.tun_config.destination(addr.addr());
     }
 
@@ -152,12 +154,12 @@ impl TunBuilder {
             Ok(d) => d,
             Err(TunError::Io(err)) => {
                 error!("TunError::Io: {:?}", err);
-                return Err(err)
-            },
+                return Err(err);
+            }
             Err(err) => {
                 error!("error: {:?}", err);
-                return Err(io::Error::new(ErrorKind::Other, err))
-            },
+                return Err(io::Error::new(ErrorKind::Other, err));
+            }
         };
         let (udp, udp_cleanup_interval, udp_keepalive_rx) = UdpTun::new(
             self.context.clone(),
@@ -166,7 +168,6 @@ impl TunBuilder {
             self.udp_capacity,
         );
         let tcp = TcpTun::new(self.context, self.balancer, device.mtu().unwrap_or(1500) as u32);
-
         Ok(Tun {
             device,
             tcp,
@@ -174,7 +175,7 @@ impl TunBuilder {
             udp_cleanup_interval,
             udp_keepalive_rx,
             mode: self.mode,
-            net_helper: self.net_helper
+            net_helper: self.net_helper,
         })
     }
 }

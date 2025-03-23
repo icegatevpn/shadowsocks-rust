@@ -54,7 +54,7 @@ fn main() -> std::io::Result<()> {
         })
         .expect("Error setting Ctrl-C handler");
     }
-    
+
     let config = format!(
         r#"{{
             "server": "45.86.229.176",

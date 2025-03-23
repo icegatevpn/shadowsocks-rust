@@ -3,7 +3,14 @@ use crate::service::key_generator::generate_key;
 use async_channel::{unbounded, Receiver, Sender};
 use axum::extract::{Path as AxPath, Path, Request};
 use axum::routing::{delete, put};
-use axum::{extract::State, http::StatusCode, response::{IntoResponse, Response}, routing::{get, post}, Json, Router};
+use axum::{
+    extract::State,
+    http::StatusCode,
+    response::{IntoResponse, Response},
+    routing::{get, post},
+    Json, Router,
+};
+use futures::TryFutureExt;
 #[cfg(feature = "manager")]
 use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
@@ -13,9 +20,8 @@ use shadowsocks::manager::protocol::AddUser;
 use shadowsocks_service::mysql_db::Database;
 use shadowsocks_service::shadowsocks;
 use shadowsocks_service::url_generator::generate_ssurl;
-use std::{collections::HashMap, fmt, sync::Arc};
 use std::net::IpAddr;
-use futures::TryFutureExt;
+use std::{collections::HashMap, fmt, sync::Arc};
 use tokio::{
     sync::{oneshot, Mutex},
     time::{timeout, Duration},
@@ -221,7 +227,6 @@ async fn remove_user(State(state): State<AppState>, Path(key): Path<String>) -> 
     };
     let new_command = DomainCommand::new(&format!("removeu:{}", user.key));
 
-    debug!("<<<<< Command: {:?}", new_command);
     let (status, response) = send_command(&state, new_command, COMMAND_TIMEOUT_SECS).await;
 
     (status, Json(response))
@@ -644,7 +649,10 @@ async fn create_access_key(
 ) -> impl IntoResponse {
     let mut db = state.db.lock().await;
     // Get name from payload or generate default
-    let key_name = payload.name.clone().unwrap_or_else(|| format!("user_{}", chrono::Utc::now().timestamp()));
+    let key_name = payload
+        .name
+        .clone()
+        .unwrap_or_else(|| format!("user_{}", chrono::Utc::now().timestamp()));
     // let key_name = match payload {
     //     Some(ref req) => &req.name.clone().unwrap_or_else(|| format!("user_{}", chrono::Utc::now().timestamp())),
     //     None => &format!("user_{}", chrono::Utc::now().timestamp()),
@@ -763,7 +771,7 @@ async fn list_access_keys(State(_): State<AppState>) -> impl IntoResponse {
 #[cfg(feature = "database")]
 // async fn generate_ssurl_handler(State(state): State<AppState>, user_id: Option<AxPath<i64>>) -> impl IntoResponse {
 async fn generate_ssurl_handler(State(state): State<AppState>, Path(user_id): Path<i64>) -> impl IntoResponse {
-    let user_id = user_id;//user_id.map(|m| m.0).unwrap_or_else(|| -1);
+    let user_id = user_id;
 
     let db = state.db.lock().await;
     if let Ok(params) = db.build_ssurl_params_from_user_id(user_id, "oops") {

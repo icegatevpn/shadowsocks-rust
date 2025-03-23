@@ -12,9 +12,9 @@ use tokio::{
     time,
 };
 
-use crate::local::net::AutoProxyIo;
 use crate::local::net::tcp::auto_proxy_stream::DebugStatus;
-use crate::me_debug;
+use crate::local::net::AutoProxyIo;
+use crate::my_debug;
 
 pub(crate) async fn establish_tcp_tunnel<P, S>(
     svr_cfg: &ServerConfig,
@@ -63,7 +63,7 @@ where
                 // Timeout. Send handshake to server.
                 let _ = shadow.write(&[]).await?;
 
-                me_debug!(
+                my_debug!(
                     "tcp tunnel {} -> {} (proxied) sent handshake without data",
                     peer_addr,
                     target_addr
@@ -120,9 +120,7 @@ where
         Err(err) => {
             error!(
                 "tcp tunnel {} <-> {} (bypassed) closed with error: {}",
-                peer_addr,
-                target_addr,
-                err
+                peer_addr, target_addr, err
             );
         }
     }

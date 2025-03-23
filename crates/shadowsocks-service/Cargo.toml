@@ -182,7 +182,7 @@ flate2 = { version = "1.0", optional = true }
 brotli = { version = "7.0", optional = true }
 zstd = { version = "0.13", optional = true }
 
-tun = {git = "https://github.com/icegatevpn/rust-tun", version = "0.7.15", branch = "work",  optional = true, features = ["async"]}
+tun = { git = "https://github.com/icegatevpn/rust-tun", version = "0.7.17", branch = "work", optional = true, features = ["async"] }
 etherparse = { version = "0.17", optional = true }
 smoltcp = { version = "0.12", optional = true, default-features = false, features = [
     "std",
@@ -199,7 +199,7 @@ serde = { version = "1.0", features = ["derive"] }
 json5 = "0.4"
 bson = { version = "2.13.0", optional = true }
 #limbo = { git =  "https://github.com/tursodatabase/limbo", tag = "v0.0.10", package = "limbo_core"}
-rusqlite = { version = "0.32.1", features = ["chrono", "hooks"], optional = true}
+rusqlite = { version = "0.32.1", features = ["chrono", "hooks"], optional = true }
 #tokio-rusqlite = "0.6.0"
 
 shadowsocks = { version = "1.23.0", path = "../shadowsocks", default-features = false }

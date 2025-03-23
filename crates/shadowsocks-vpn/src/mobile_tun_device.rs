@@ -3,12 +3,11 @@ use clap::Command;
 use futures::executor::block_on;
 use futures::future::err;
 use ipnet::IpNet;
-use log::{debug, error, info, warn};
 use serde_json::{json, Value};
 use shadowsocks::config::Mode;
 use shadowsocks::relay::udprelay::DatagramReceiveExt;
 use shadowsocks_rust::service::local;
-use shadowsocks_rust::VERSION;
+use shadowsocks_rust::{my_debug, my_error, my_info, my_warn, VERSION};
 use shadowsocks_service::config::Config;
 use shadowsocks_service::local::context::ServiceContext;
 use shadowsocks_service::local::loadbalancing::PingBalancerBuilder;
@@ -135,10 +134,9 @@ impl MobileTunDevice {
     }
 
     pub async fn new(fd: i32, config: &str) -> Result<Self, TunError> {
-        debug!("Creating TUN device with fd: {:?}", fd);
-
+        my_debug!("Creating TUN device with fd: {:?}", fd);
         let updated_config = Self::add_tun_device_fd_to_config(config, fd).map_err(|err| {
-            error!("Failed to update config: {}", err);
+            my_error!("Failed to update config: {}", err);
             TunError::ConfigError("Failed to update config")
         })?;
         Ok(MobileTunDevice {
@@ -168,7 +166,7 @@ impl MobileTunDevice {
             Ok((config, runtime, main_fut)) => {
                 let status_clone = self.status.clone();
                 std::thread::spawn(move || {
-                    info!("Starting Shadowsocks service in background thread");
+                    my_info!("Starting Shadowsocks service in background thread");
 
                     // Create a shutdown-aware future
                     let combined_fut = async move {
@@ -176,18 +174,18 @@ impl MobileTunDevice {
                             result = main_fut => {
                                 match result {
                                     Ok(_) => {
-                                        info!("Shadowsocks service completed successfully");
+                                        my_info!("Shadowsocks service completed successfully");
                                         VPNStatus::disconnected()
                                     }
                                     Err(err) => {
                                         let msg = format!("Shadowsocks service error: {}", err);
-                                        error!("{}", msg);
+                                        my_error!("{}", msg);
                                         VPNStatus::error(&msg)
                                     }
                                 }
                             }
                             _ = rx.recv() => {
-                                info!("Shutdown signal received, stopping Shadowsocks service");
+                                my_info!("Shutdown signal received, stopping Shadowsocks service");
                                 VPNStatus::disconnected()
                             }
                         }
@@ -213,16 +211,16 @@ impl MobileTunDevice {
                 Ok(())
             }
             Err(err) => {
-                let err_msg = format!("<<< Failed to create Shadowsocks service: {}", err);
-                error!("{}", err_msg);
+                let err_msg = format!("Failed to create Shadowsocks service: {}", err);
+                my_error!("{}", err_msg);
                 self.update_status(VPNStatus::error(&err_msg)).await;
-                Err(TunError::DeviceError("<<< Failed to create Shadowsocks service"))
+                Err(TunError::DeviceError(&err_msg))
             }
         }
     }
 
     pub async fn cancel(&self) -> Result<(), TunError> {
-        info!("Cancelling TUN tunnel");
+        my_info!("Cancelling TUN tunnel");
 
         // Get the shutdown sender if available
         let mut signal = self.shutdown_signal.lock().await;
@@ -230,7 +228,7 @@ impl MobileTunDevice {
         if let Some(tx) = signal.take() {
             // Send the shutdown signal
             if let Err(err) = tx.send(()).await {
-                warn!("Failed to send shutdown signal: {}", err);
+                my_warn!("Failed to send shutdown signal: {}", err);
                 // Continue anyway - the receiver might be dropped if the task completed naturally
             }
 
@@ -238,7 +236,7 @@ impl MobileTunDevice {
             self.update_status(VPNStatus::disconnected()).await;
             Ok(())
         } else {
-            warn!("No active tunnel to cancel");
+            my_warn!("No active tunnel to cancel");
             Ok(())
         }
     }

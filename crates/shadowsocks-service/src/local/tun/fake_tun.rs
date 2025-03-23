@@ -33,59 +33,59 @@ pub struct FakeDevice;
 
 impl AbstractDevice for FakeDevice {
     fn tun_name(&self) -> tun::Result<String> {
-        Err(TunError::NotImplemented)
+        Err(TunError::String("no tun_name, is fake".into()))
     }
 
     fn tun_index(&self) -> tun::Result<i32> {
-        Err(TunError::NotImplemented)
+        Err(TunError::String("no tun_index, is fake".into()))
     }
 
     fn set_tun_name(&mut self, _: &str) -> tun::Result<()> {
-        Err(TunError::NotImplemented)
+        Err(TunError::String("no tun_name, is fake".into()))
     }
 
     fn enabled(&mut self, _: bool) -> tun::Result<()> {
-        Err(TunError::NotImplemented)
+        Err(TunError::String("no enabled, is fake".into()))
     }
 
     fn address(&self) -> tun::Result<IpAddr> {
-        Err(TunError::NotImplemented)
+        Err(TunError::String("no address, is fake".into()))
     }
 
     fn set_address(&mut self, _: IpAddr) -> tun::Result<()> {
-        Err(TunError::NotImplemented)
+        Err(TunError::String("no address, is fake".into()))
     }
 
     fn destination(&self) -> tun::Result<IpAddr> {
-        Err(TunError::NotImplemented)
+        Err(TunError::String("no destination, is fake".into()))
     }
 
     fn set_destination(&mut self, _: IpAddr) -> tun::Result<()> {
-        Err(TunError::NotImplemented)
+        Err(TunError::String("no destination, is fake".into()))
     }
 
     fn broadcast(&self) -> tun::Result<IpAddr> {
-        Err(TunError::NotImplemented)
+        Err(TunError::String("no broadcast, is fake".into()))
     }
 
     fn set_broadcast(&mut self, _: IpAddr) -> tun::Result<()> {
-        Err(TunError::NotImplemented)
+        Err(TunError::String("no broadcast, is fake".into()))
     }
 
     fn netmask(&self) -> tun::Result<IpAddr> {
-        Err(TunError::NotImplemented)
+        Err(TunError::String("no netmask, is fake".into()))
     }
 
     fn set_netmask(&mut self, _: IpAddr) -> tun::Result<()> {
-        Err(TunError::NotImplemented)
+        Err(TunError::String("no netmask configured, is fake".into()))
     }
 
     fn mtu(&self) -> tun::Result<u16> {
-        Err(TunError::NotImplemented)
+        Err(TunError::String("no mtu, is fake".into()))
     }
 
     fn set_mtu(&mut self, _: u16) -> tun::Result<()> {
-        Err(TunError::NotImplemented)
+        Err(TunError::String("no mtu, is fake".into()))
     }
 
     fn packet_information(&self) -> bool {
@@ -159,5 +159,5 @@ impl AsyncWrite for AsyncDevice {
 
 /// Create a TUN device with the given name.
 pub fn create_as_async(_: &Configuration) -> Result<AsyncDevice, TunError> {
-    Err(TunError::NotImplemented)
+    Err(TunError::String("create_as_async Not! I'm Fake.".into()))
 }

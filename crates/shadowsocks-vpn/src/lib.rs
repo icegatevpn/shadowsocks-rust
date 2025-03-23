@@ -258,13 +258,11 @@ pub extern "C" fn test_logging() {
 #[cfg(any(target_os = "ios", target_os = "tvos"))]
 pub mod ios {
     use crate::mobile_tun_device::{MobileTunDevice, TunDeviceConfig, VPNStatus, VPNStatusCode};
-    use crate::VpnError;
     use crate::{get_log_lvl, VpnContext};
     use futures::executor::block_on;
-    use log::{debug, error, warn, LevelFilter};
+    use log::{LevelFilter};
     use oslog::OsLogger;
-    use shadowsocks::context::Context;
-    use shadowsocks_service::config::{Config, ConfigType};
+    use shadowsocks_service::{my_debug, my_error, my_warn};
     use std::ffi::{c_char, c_longlong, CStr};
     use std::ptr;
     use tokio::runtime::Runtime;
@@ -311,14 +309,14 @@ pub mod ios {
         }};
     }
     pub fn create_vpn(config_json: *const c_char, fd: i32) -> *mut VpnContext {
-        debug!("Creating VPN");
-        let config_str = c_str!(config_json).expect("failed to parse config");
+        my_debug!("Creating VPN");
+        let config_str = c_str!(config_json).expect("<< failed to parse config");
         init_logging(config_str);
         // Create runtime for async operations
         let runtime = match Runtime::new() {
             Ok(rt) => rt,
             Err(e) => {
-                error!("Failed to create runtime: {}", e);
+                my_error!("Failed to create runtime: {}", e);
                 return ptr::null_mut();
             }
         };
@@ -327,7 +325,7 @@ pub mod ios {
         let tun_device = match runtime.block_on(async { MobileTunDevice::new(fd, config_str).await }) {
             Ok(tun) => tun,
             Err(e) => {
-                error!("Failed to create TUN device: {:?}", e);
+                my_error!("Failed to create TUN device: {:?}", e);
                 return ptr::null_mut();
             }
         };
@@ -343,18 +341,19 @@ pub mod ios {
     }
 
     pub unsafe fn start_vpn(context: *mut VpnContext) -> Result<i64, VPNError> {
+        my_debug!("Start VPN!!!!");
         let context = &mut *context;
         let runtime_handle = context.runtime.handle().clone();
         // Spawn the tunnel task into the background
         runtime_handle.spawn(async move {
-            debug!("Starting TUN device in background task ....");
+            my_debug!("Starting TUN device in background task ....");
             match context.tun_device.start_tunnel().await {
                 Ok(_) => {
-                    debug!("TUN tunnel completed successfully");
+                    my_debug!("TUN tunnel completed successfully");
                     VPNStatusCode::Connected.tou8() as i64
                 }
                 Err(e) => {
-                    error!("TUN tunnel error: {:?}", e);
+                    my_error!("TUN tunnel error: {:?}", e);
                     VPNStatusCode::Error.tou8() as i64
                 }
             }
@@ -367,15 +366,15 @@ pub mod ios {
     pub unsafe fn stop_vpn(context: *mut VpnContext) -> Result<i64, VPNError> {
         let context = &mut *context;
         block_on(async {
-            debug!("<<< stopping TUN device...");
+            my_debug!("stopping TUN device...");
             match context.tun_device.cancel().await {
                 Ok(_) => {
-                    debug!("<< TUN stopped successfully");
+                    my_debug!("TUN stopped successfully");
                     Ok(VPNStatusCode::Started.tou8() as i64)
                 }
                 Err(e) => {
-                    error!("<< Failed to stop TUN device: {:?}", e);
-                    Err(VPNError::Other("<<< Failed to stop Shadowsocks service"))
+                    my_error!("Failed to stop TUN device: {:?}", e);
+                    Err(VPNError::Other("Failed to stop Shadowsocks service"))
                 }
             }
         })
