@@ -7,11 +7,12 @@ use serde_json::{json, Value};
 use shadowsocks::config::Mode;
 use shadowsocks::relay::udprelay::DatagramReceiveExt;
 use shadowsocks_rust::service::local;
-use shadowsocks_rust::{my_debug, my_error, my_info, my_warn, VERSION};
+use shadowsocks_rust::VERSION;
 use shadowsocks_service::config::Config;
 use shadowsocks_service::local::context::ServiceContext;
 use shadowsocks_service::local::loadbalancing::PingBalancerBuilder;
 use shadowsocks_service::local::tun::{StaticDeviceNetHelper, TunBuilder};
+use shadowsocks_service::{my_debug, my_error, my_info, my_warn};
 use std::fmt::{format, Debug};
 use std::os::fd::RawFd;
 use std::thread::JoinHandle;
@@ -214,7 +215,7 @@ impl MobileTunDevice {
                 let err_msg = format!("Failed to create Shadowsocks service: {}", err);
                 my_error!("{}", err_msg);
                 self.update_status(VPNStatus::error(&err_msg)).await;
-                Err(TunError::DeviceError(&err_msg))
+                Err(TunError::DeviceError("Failed to create Shadowsocks service"))
             }
         }
     }
