@@ -101,8 +101,8 @@ impl MacOSTunDevice {
         self.shutdown_signal = Arc::new(Mutex::new(Some(tx.clone())));
 
         // Create the local service runtime and future
-        let (config, runtime, main_fut) = match local::create(&matches, Some(&config_str)) {
-            Ok((cf, rt, fut)) => (cf, rt, fut),
+        let (config, runtime, _, main_fut) = match local::create(&matches, Some(&config_str)) {
+            Ok((cf, rt, ks, fut)) => (cf, rt, ks, fut),
             Err(err) => {
                 error!("Failed to create Shadowsocks service: {}", err);
                 return Err(io::Error::new(

@@ -153,7 +153,7 @@ impl MobileTunDevice {
             .expect("no matches :(");
         let create_result = local::create(&matches, Some(&self.config));
         match create_result {
-            Ok((config, runtime, main_fut)) => {
+            Ok((config, runtime, _, main_fut)) => {
                 let status_clone = self.status.clone();
                 std::thread::spawn(move || {
                     my_info!("Starting Shadowsocks service in background thread");
