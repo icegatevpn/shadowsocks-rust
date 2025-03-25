@@ -10,7 +10,7 @@ use shadowsocks_service::{
 use std::io;
 use std::process::Command;
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use tokio::sync::{oneshot, Mutex};
 use shadowsocks_rust::service::local;
 use shadowsocks_rust::VERSION;
 
@@ -26,6 +26,7 @@ pub struct WindowsTunDevice {
     running: Arc<Mutex<bool>>,
     original_state: Arc<Mutex<Option<RouteState>>>,
     tun_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    kill_switch: Option<oneshot::Sender<()>>
 }
 
 impl WindowsTunDevice {
@@ -36,6 +37,7 @@ impl WindowsTunDevice {
             running: Arc::default(),
             original_state: Arc::default(),
             tun_task: Mutex::default(),
+            kill_switch: None
         })
     }
 
@@ -341,13 +343,14 @@ impl WindowsTunDevice {
         let matches = app.get_matches();
 
         // Create the local service runtime and future
-        let (config, runtime, main_fut) = match local::create(&matches, Some(&config_str)) {
-            Ok((cf, rt, fut)) => (cf, rt, fut),
+        let (config, runtime, kill_switch, main_fut) = match local::create(&matches, Some(&config_str)) {
+            Ok((cf, rt, ks, fut)) => (cf, rt, ks, fut),
             Err(err) => {
                 error!("Failed to create Shadowsocks service: {}", err);
                 return Err(io::Error::new(io::ErrorKind::Other, format!("Service creation error: {}", err)));
             }
         };
+        self.kill_switch = Some(kill_switch);
         let running = self.running.clone();
         std::thread::spawn(move || {
             info!("Starting Shadowsocks service in background thread");
@@ -385,10 +388,11 @@ impl WindowsTunDevice {
         Ok(())
     }
 
-    pub async fn stop(&self) -> io::Result<()> {
+    pub async fn stop(&mut self) -> io::Result<()> {
 
-        if let Some(task) = self.tun_task.lock().await.as_ref() {
-            task.abort();
+        if let Some(shutdown_tx) = self.kill_switch.take() {
+            _ = shutdown_tx.send(());
+            info!("Shutdown signal sent to VPN task");
         }
         if let Some(state) = self.original_state.lock().await.as_ref() {
             self.restore_routing(state).await?;

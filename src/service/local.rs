@@ -1,7 +1,7 @@
 //! Local server launchers
 
 use clap::{builder::PossibleValuesParser, Arg, ArgAction, ArgGroup, ArgMatches, Command, ValueHint};
-use futures::future::{self, FutureExt};
+use futures::future::{self, FutureExt, OptionFuture};
 use log::{debug, error, info, trace};
 #[cfg(unix)]
 use std::os::fd::RawFd;
@@ -18,7 +18,7 @@ use tokio::{
     self,
     runtime::{Builder, Runtime},
 };
-
+use tokio::sync::oneshot;
 #[cfg(feature = "local-redir")]
 use shadowsocks_service::config::RedirType;
 #[cfg(feature = "local-tunnel")]
@@ -596,7 +596,7 @@ pub fn define_command_line_options(mut app: Command) -> Command {
 pub fn create(
     matches: &ArgMatches,
     config_str: Option<&str>,
-) -> ShadowsocksResult<(Config, Runtime, impl Future<Output = ShadowsocksResult>)> {
+) -> ShadowsocksResult<(Config, Runtime, oneshot::Sender<()>, impl Future<Output = ShadowsocksResult>)> {
     #[cfg_attr(not(feature = "local-online-config"), allow(unused_mut))]
     let (config, _, runtime) = {
         let config_path_opt = matches.get_one::<PathBuf>("CONFIG").cloned().or_else(|| {
@@ -627,27 +627,30 @@ pub fn create(
 
         #[cfg(feature = "logging")]
         {
-            let mut do_logging = true;
-            match config_str {
-                Some(c) => {
-                    if c.contains("rust_log_lvl") || cfg!(target_os = "tvos") {
-                        trace!("rust_log_lvl set, skip logging init...");
-                        do_logging = false;
+            static LOG_INIT: std::sync::Once = std::sync::Once::new();
+            LOG_INIT.call_once(|| {
+                let mut do_logging = true;
+                match config_str {
+                    Some(c) => {
+                        if c.contains("rust_log_lvl") || cfg!(target_os = "tvos") {
+                            trace!("rust_log_lvl set, skip logging init...");
+                            do_logging = false;
+                        }
                     }
+                    None => {}
                 }
-                None => {}
-            }
 
-            if do_logging {
-                match service_config.log.config_path {
-                    Some(ref path) => {
-                        logging::init_with_file(path);
-                    }
-                    None => {
-                        logging::init_with_config("sslocal", &service_config.log);
+                if do_logging {
+                    match service_config.log.config_path {
+                        Some(ref path) => {
+                            logging::init_with_file(path);
+                        }
+                        None => {
+                            logging::init_with_config("sslocal", &service_config.log);
+                        }
                     }
                 }
-            }
+            });
         }
 
         let mut config = match config_path_opt {
@@ -1029,6 +1032,8 @@ pub fn create(
     };
     let config_clone = config.clone();
 
+    let (shutdown_tx, mut shutdown_rx) = oneshot::channel();
+
     let main_fut = async move {
         let config_path = config_clone.config_path.clone();
 
@@ -1043,6 +1048,7 @@ pub fn create(
             .boxed(),
             None => future::pending().boxed(),
         };
+        let shutdown_fut = shutdown_rx.map(|_| ()).fuse();
 
         let abort_signal = monitor::create_signal_monitor();
         let server = instance.run();
@@ -1054,6 +1060,7 @@ pub fn create(
         tokio::pin!(reload_task);
         tokio::pin!(abort_signal);
         tokio::pin!(server);
+        tokio::pin!(shutdown_fut);
 
         loop {
             futures::select! {
@@ -1077,17 +1084,21 @@ pub fn create(
                     // continue.
                     trace!("server-loader task task exited");
                 }
+                _ = &mut shutdown_fut => {
+                    trace!("shutdown signal received");
+                    return Ok(());
+                }
             }
         }
     };
 
-    Ok((config, runtime, main_fut))
+    Ok((config, runtime, shutdown_tx, main_fut))
 }
 
 /// Program entrance `main`
 #[inline]
 pub fn main(matches: &ArgMatches, config_str: Option<&str>) -> ExitCode {
-    match create(matches, config_str).and_then(|(_, runtime, main_fut)| runtime.block_on(main_fut)) {
+    match create(matches, config_str).and_then(|(_, runtime, _, main_fut)| runtime.block_on(main_fut)) {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
             eprintln!("{err}");
