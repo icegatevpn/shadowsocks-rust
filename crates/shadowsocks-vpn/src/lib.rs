@@ -195,7 +195,7 @@ pub extern "C" fn vpn_stop(context: *mut VpnContext) -> bool {
     }
 
     #[cfg(any(target_os = "macos", target_os = "windows"))]
-    match context.runtime.block_on(async { context.device.stop().await }) {
+    match context.runtime.block_on(async { context.device.clone().stop().await }) {
         Ok(_) => true,
         Err(e) => {
             let err_msg = format!("Failed to stop VPN: {}", e);

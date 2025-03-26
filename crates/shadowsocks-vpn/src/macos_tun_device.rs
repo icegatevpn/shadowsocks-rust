@@ -9,15 +9,16 @@ use shadowsocks_service::config::ProtocolType;
 use std::io;
 use std::process::Command as ProcessCommand;
 use std::sync::Arc;
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{mpsc, oneshot, Mutex};
 
 #[cfg(target_os = "macos")]
+#[derive(Clone)]
 pub struct MacOSTunDevice {
     config: Option<Config>,
     tun_interface: Option<String>,
     running: Arc<Mutex<bool>>,
     original_routes: Arc<Mutex<Option<String>>>,
-    shutdown_signal: Arc<Mutex<Option<mpsc::Sender<()>>>>,
+    shutdown_signal: Arc<Mutex<Option<oneshot::Sender<()>>>>,
 }
 #[cfg(target_os = "macos")]
 #[derive(Debug, Serialize, Deserialize)]
@@ -97,11 +98,8 @@ impl MacOSTunDevice {
 
         let matches = app.get_matches();
 
-        let (tx, mut rx) = mpsc::channel::<()>(1);
-        self.shutdown_signal = Arc::new(Mutex::new(Some(tx.clone())));
-
         // Create the local service runtime and future
-        let (config, runtime, _, main_fut) = match local::create(&matches, Some(&config_str)) {
+        let (config, runtime, kill_switch, main_fut) = match local::create(&matches, Some(&config_str)) {
             Ok((cf, rt, ks, fut)) => (cf, rt, ks, fut),
             Err(err) => {
                 error!("Failed to create Shadowsocks service: {}", err);
@@ -111,30 +109,19 @@ impl MacOSTunDevice {
                 ));
             }
         };
+        self.shutdown_signal = Arc::new(Mutex::new(Some(kill_switch)));
         let running = self.running.clone();
         std::thread::spawn(move || {
             info!("Starting Shadowsocks service in background thread");
-            let combined_fut = async move {
-                tokio::select! {
-                    result = main_fut => {
-                        match result {
-                            Ok(_) => {
-                                info!("Shadowsocks service completed successfully");
-                            }
-                            Err(err) => {
-                                error!("Shadowsocks service error: {}", err);
-                            }
-                        }
-                    }
-                    _ = rx.recv() => {
-                        info!("Shutdown signal received, stopping Shadowsocks service");
-                    }
-                }
-            };
-            runtime.block_on(combined_fut);
-            runtime.block_on(async {
+            let result = runtime.block_on(async {
+                let res = main_fut.await;
                 *running.lock().await = false;
+                res
             });
+            match result {
+                Ok(_) => info!("Shadowsocks service completed successfully"),
+                Err(err) => error!("Shadowsocks service error: {}", err),
+            }
         });
 
         *self.running.lock().await = true;
@@ -145,7 +132,7 @@ impl MacOSTunDevice {
             info!("Shadowsocks running on Tun {:?}...", self.tun_interface)
         }
 
-        // Configure routing
+        #[cfg(feature = "routing")]
         if let Some(interface) = &self.tun_interface {
             self.configure_routing(interface).await?
         }
@@ -193,6 +180,7 @@ impl MacOSTunDevice {
         })
     }
 
+    #[cfg(feature = "routing")]
     fn native_default_gateway(&self) -> io::Result<String> {
         let output = ProcessCommand::new("route").args(["-n", "get", "default"]).output()?;
 
@@ -212,6 +200,7 @@ impl MacOSTunDevice {
         Ok(gateway.ok_or_else(|| io::Error::new(io::ErrorKind::Other, "Could not determine default gateway"))?)
     }
 
+    #[cfg(feature = "routing")]
     async fn clear_default_route(&self, default_gateway: &str) -> io::Result<()> {
         debug!("Current default gateway is: {}", &default_gateway);
 
@@ -233,8 +222,8 @@ impl MacOSTunDevice {
         Ok(())
     }
 
+    #[cfg(feature = "routing")]
     async fn configure_routing(&self, interface: &str) -> io::Result<()> {
-        // return Ok(());  bypass all!!
         // Save current routing state before making changes
         let route_state = self.save_routing_state().await?;
         debug!(
@@ -326,6 +315,7 @@ impl MacOSTunDevice {
         Ok(service)
     }
 
+    #[cfg(feature = "routing")]
     async fn disable_ipv6(&self, original_interface: &str) -> io::Result<()> {
         debug!("Disabling IPv6 on interface: {}", original_interface);
         // Get network service name for the interface
@@ -353,6 +343,7 @@ impl MacOSTunDevice {
         Ok(())
     }
 
+    #[cfg(feature = "routing")]
     async fn restore_ipv6(&self, original_interface: &str) -> io::Result<()> {
         // Get network service name for the interface
         let service = self.device_service_name(original_interface)?;
@@ -378,6 +369,7 @@ impl MacOSTunDevice {
         Ok(())
     }
 
+    #[cfg(feature = "routing")]
     async fn restore_routing_state(&self) -> io::Result<()> {
         let route_state: RouteState = if let Some(saved_state) = self.original_routes.lock().await.as_ref() {
             serde_json::from_str(saved_state)?
@@ -411,6 +403,7 @@ impl MacOSTunDevice {
         Ok(())
     }
 
+    #[cfg(feature = "routing")]
     async fn cleanup_routing(&self, interface: &str) -> io::Result<()> {
         debug!("Cleaning up routing state for: {}", interface);
         // Get the original state first - we need this for IPv6 restoration
@@ -513,17 +506,18 @@ impl MacOSTunDevice {
         Ok(())
     }
 
-    pub async fn stop(&self) -> io::Result<()> {
+    pub async fn stop(mut self) -> io::Result<()> {
         debug!("STOPPING...");
-        let mut signal = self.shutdown_signal.lock().await;
+
+        let signal = self.shutdown_signal.clone();
+        let mut signal = signal.lock().await;
         if let Some(tx) = signal.take() {
-            if let Err(err) = tx.send(()).await {
-                warn!("Failed to send shutdown signal: {}", err);
-            }
+            _ = tx.send(());
         } else {
-            warn!("No active tunnel to cancel");
+            warn!("No Shutdown signal set");
         }
 
+        #[cfg(feature = "routing")]
         if let Some(interface) = &self.tun_interface {
             self.cleanup_routing(interface).await?;
         }
