@@ -7,7 +7,8 @@ use shadowsocks_rust::VERSION;
 use shadowsocks_service::{my_debug, my_error, my_info, my_warn};
 use std::fmt::{Debug};
 use std::{io, sync::Arc};
-use tokio::sync::{mpsc, Mutex};
+use log::{error, info};
+use tokio::sync::{mpsc, oneshot, Mutex};
 
 #[derive(Debug)]
 pub enum TunError {
@@ -78,7 +79,7 @@ impl Debug for TunDeviceConfig {
 pub struct MobileTunDevice {
     pub config: String,
     pub status: Arc<Mutex<VPNStatus>>,
-    shutdown_signal: Arc<Mutex<Option<mpsc::Sender<()>>>>,
+    shutdown_signal: Arc<Mutex<Option<oneshot::Sender<()>>>>,
 }
 
 impl MobileTunDevice {
@@ -138,13 +139,6 @@ impl MobileTunDevice {
 
     pub async fn start_tunnel(&self) -> Result<(), TunError> {
         self.update_status(VPNStatus::connecting()).await;
-        // First, create the shutdown channel
-        let (tx, mut rx) = mpsc::channel::<()>(1);
-        // Store the sender for cancellation
-        {
-            let mut signal = self.shutdown_signal.lock().await;
-            *signal = Some(tx);
-        }
         let mut app = Command::new("shadowsocks").version(VERSION);
         app = local::define_command_line_options(app);
 
@@ -153,40 +147,31 @@ impl MobileTunDevice {
             .expect("no matches :(");
         let create_result = local::create(&matches, Some(&self.config));
         match create_result {
-            Ok((config, runtime, _, main_fut)) => {
+            Ok((config, runtime, kill_switch, main_fut)) => {
                 let status_clone = self.status.clone();
+                {
+                    let mut signal = self.shutdown_signal.lock().await;
+                    *signal = Some(kill_switch);
+                }
                 std::thread::spawn(move || {
                     my_info!("Starting Shadowsocks service in background thread");
 
-                    // Create a shutdown-aware future
-                    let combined_fut = async move {
-                        tokio::select! {
-                            result = main_fut => {
-                                match result {
-                                    Ok(_) => {
-                                        my_info!("Shadowsocks service completed successfully");
-                                        VPNStatus::disconnected()
-                                    }
-                                    Err(err) => {
-                                        let msg = format!("Shadowsocks service error: {}", err);
-                                        my_error!("{}", msg);
-                                        VPNStatus::error(&msg)
-                                    }
-                                }
-                            }
-                            _ = rx.recv() => {
-                                my_info!("Shutdown signal received, stopping Shadowsocks service");
-                                VPNStatus::disconnected()
-                            }
-                        }
+                    let result = match runtime.block_on(async {
+                        main_fut.await
+                    }) {
+                        Ok(_) => {
+                            info!("Shadowsocks service completed successfully");
+                            VPNStatus::disconnected()
+                        },
+                        Err(err) => {
+                            error!("Shadowsocks service error: {}", err);
+                            VPNStatus::error("Shadowsocks service error")
+                        },
                     };
 
-                    // Run the combined future in the runtime
-                    let final_status = runtime.block_on(combined_fut);
-                    // Update status after completion
                     runtime.block_on(async {
                         let mut status = status_clone.lock().await;
-                        *status = final_status;
+                        *status = result;
                     });
 
                     // Runtime will be dropped here, cleaning up any remaining tasks
@@ -217,8 +202,8 @@ impl MobileTunDevice {
 
         if let Some(tx) = signal.take() {
             // Send the shutdown signal
-            if let Err(err) = tx.send(()).await {
-                my_warn!("Failed to send shutdown signal: {}", err);
+            if let Err(err) = tx.send(()) {
+                my_warn!("Failed to send shutdown signal");
                 // Continue anyway - the receiver might be dropped if the task completed naturally
             }
 
