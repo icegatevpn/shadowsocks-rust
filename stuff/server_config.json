@@ -3,7 +3,7 @@
   "manager_tcp_port": 8080,
   "servers": [
     {
-    "server": "45.86.229.176",
+    "server": "85.239.55.80",
     "server_port": 443,
     "password": "yJxlMnbXB0fpbQ+YfBwmV4GVr1ndRbsEJXdrJFQNeRE=",
     "method": "2022-blake3-aes-256-gcm",

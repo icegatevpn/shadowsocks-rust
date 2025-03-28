@@ -44,12 +44,10 @@ image = "ghcr.io/cross-rs/x86_64-linux-android:latest"
 CARGO_TARGET_X86_64_LINUX_ANDROID_LINKER = "x86_64-linux-android-clang"
 CFLAGS = "-fPIC"
 
+# I don't think this is working right, the cross does still use the Dockerfile and it seems to work
+# but it rebuilds the entire image every time.
 [target.x86_64-unknown-linux-gnu]
-image = "ghcr.io/cross-rs/x86_64-pc-windows-gnu:latest"
-pre-build = [
-    "apt-get update",
-    "apt-get install -y libsqlite3-dev"
-]
+image = "rust-cross-x86_64"
 
 [target.aarch64-pc-windows-msvc]
 image = "ghcr.io/cross-rs/aarch64-pc-windows-msvc:latest"
