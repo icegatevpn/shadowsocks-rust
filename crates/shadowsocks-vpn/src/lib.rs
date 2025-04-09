@@ -18,7 +18,7 @@ fn set_last_error<E: std::fmt::Display>(err: E) {
 }
 
 #[cfg(target_os = "macos")]
-mod macos_tun_device;
+pub mod macos_tun_device;
 #[cfg(any(target_os = "android", target_os = "ios", target_os = "tvos"))]
 mod mobile_tun_device;
 #[cfg(target_os = "windows")]
