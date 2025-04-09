@@ -3,7 +3,6 @@
 #![allow(dead_code)]
 
 use std::net::{IpAddr, SocketAddr};
-
 #[cfg(any(feature = "local-tun", feature = "local-fake-dns"))]
 use ipnet::IpNet;
 #[cfg(feature = "local-redir")]
@@ -60,6 +59,13 @@ pub fn parse_server_url(v: &str) -> Result<ServerConfig, String> {
 pub fn parse_ipnet(v: &str) -> Result<IpNet, String> {
     match v.parse::<IpNet>() {
         Err(..) => Err("should be a CIDR address like 10.1.2.3/24".to_owned()),
+        Ok(n) => Ok(n),
+    }
+}
+#[cfg(any(feature = "local-tun", feature = "local-fake-dns"))]
+pub fn parse_fd(v: &str) -> Result<i32, String> {
+    match v.parse::<i32>() {
+        Err(..) => Err("should be an i32 file descriptor".to_owned()),
         Ok(n) => Ok(n),
     }
 }

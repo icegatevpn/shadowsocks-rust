@@ -1,5 +1,11 @@
 //! Shadowsocks Local server serving on a Tun interface
 
+use byte_string::ByteStr;
+use cfg_if::cfg_if;
+use ipnet::IpNet;
+use log::{debug, error, info, trace, warn};
+use shadowsocks::config::Mode;
+use smoltcp::wire::{IpProtocol, TcpPacket, UdpPacket};
 #[cfg(unix)]
 use std::os::unix::io::RawFd;
 use std::{
@@ -8,13 +14,6 @@ use std::{
     sync::Arc,
     time::Duration,
 };
-
-use byte_string::ByteStr;
-use cfg_if::cfg_if;
-use ipnet::IpNet;
-use log::{debug, error, info, trace, warn};
-use shadowsocks::config::Mode;
-use smoltcp::wire::{IpProtocol, TcpPacket, UdpPacket};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     sync::mpsc,
@@ -23,6 +22,7 @@ use tokio::{
 
 cfg_if! {
     if #[cfg(any(target_os = "ios",
+                 target_os = "tvos",
                  target_os = "macos",
                  target_os = "linux",
                  target_os = "android",
@@ -47,7 +47,6 @@ mod ip_packet;
 mod tcp;
 mod udp;
 mod virt_device;
-
 
 pub trait DeviceNetHelper: Send + Sync {
     fn address(&self) -> io::Result<IpAddr>;
@@ -107,12 +106,16 @@ impl TunBuilder {
     }
     // Add method to set the network helper
     pub fn with_net_helper<H: DeviceNetHelper + 'static>(&mut self, helper: H) -> &mut Self {
+        info!(
+            " ****** net helper: {}: {}",
+            helper.address().unwrap(),
+            helper.netmask().unwrap()
+        );
         self.net_helper = Some(Arc::new(helper));
         self
     }
 
     pub fn destination(&mut self, addr: IpNet) {
-        info!("something here!");
         self.tun_config.destination(addr.addr());
     }
 
@@ -139,9 +142,7 @@ impl TunBuilder {
 
     /// Build Tun server
     pub async fn build(mut self) -> io::Result<Tun> {
-        debug!("build!!!!");
         self.tun_config.layer(Layer::L3).up();
-        debug!(" ..... 0");
         // XXX: tun2 set IFF_NO_PI by default.
         //
         // #[cfg(target_os = "linux")]
@@ -149,22 +150,24 @@ impl TunBuilder {
         //     // IFF_NO_PI preventing excessive buffer reallocating
         //     tun_config.packet_information(false);
         // });
-
         let device = match create_as_async(&self.tun_config) {
             Ok(d) => d,
-            Err(TunError::Io(err)) => return Err(err),
-            Err(err) => return Err(io::Error::new(ErrorKind::Other, err)),
+            Err(TunError::Io(err)) => {
+                error!("TunError::Io: {:?}", err);
+                return Err(err);
+            }
+            Err(err) => {
+                error!("error: {:?}", err);
+                return Err(io::Error::new(ErrorKind::Other, err));
+            }
         };
-        debug!("..... 1");
         let (udp, udp_cleanup_interval, udp_keepalive_rx) = UdpTun::new(
             self.context.clone(),
             self.balancer.clone(),
             self.udp_expiry_duration,
             self.udp_capacity,
         );
-        debug!("..... 2");
         let tcp = TcpTun::new(self.context, self.balancer, device.mtu().unwrap_or(1500) as u32);
-        debug!("..... 3");
         Ok(Tun {
             device,
             tcp,
@@ -197,7 +200,7 @@ impl Tun {
     pub async fn run(mut self) -> io::Result<()> {
         info!(
             "shadowsocks tun device {}, mode {}",
-            self.device.tun_name().or_else(|r| Ok::<_, ()>(r.to_string())).unwrap(),
+            self.interface_name().or_else(|r| Ok::<_, ()>(r.to_string())).unwrap(),
             self.mode,
         );
 
@@ -248,9 +251,11 @@ impl Tun {
         loop {
             tokio::select! {
                 // tun device
-                n = self.device.read(&mut packet_buffer) => {
-                    let n = n?;
-
+                read_result = async {
+                    // let mut device = self.device.lock().await;
+                    self.device.read(&mut packet_buffer).await
+                } => {
+                    let n = read_result?;
                     let packet = &mut packet_buffer[..n];
                     trace!("[TUN] received IP packet {:?}", ByteStr::new(packet));
 
@@ -261,6 +266,7 @@ impl Tun {
 
                 // UDP channel sent back
                 packet = self.udp.recv_packet() => {
+                    // let mut device = self.device.lock().await;
                     match self.device.write(&packet).await {
                         Ok(n) => {
                             if n < packet.len() {
@@ -271,8 +277,7 @@ impl Tun {
                             }
                         }
                         Err(err) => {
-                            error!("[TUN] failed to write packet, error: {}, {:?}",
-                                  err, ByteStr::new(&packet));
+                            error!("failed to write packet, error: {}", err);
                         }
                     }
                 }
@@ -290,6 +295,7 @@ impl Tun {
 
                 // TCP channel sent back
                 packet = self.tcp.recv_packet() => {
+                    // let mut device = self.device.lock().await;
                     match self.device.write(&packet).await {
                         Ok(n) => {
                             if n < packet.len() {
@@ -300,8 +306,7 @@ impl Tun {
                             }
                         }
                         Err(err) => {
-                            error!("[TUN] failed to write packet, error: {}, {:?}",
-                                  err, ByteStr::new(&packet));
+                            error!("failed to write packet, error: {}", err);
                         }
                     }
                 }

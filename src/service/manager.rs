@@ -27,6 +27,7 @@ use shadowsocks_service::{acl::AccessControl, config::{Config, ConfigType, Manag
 use crate::logging;
 use crate::{
     config::{Config as ServiceConfig, RuntimeMode},
+    error::{ShadowsocksError, ShadowsocksResult},
     monitor, vparser,
 };
 // use crate::service::mysql_db::Database;
@@ -304,7 +305,13 @@ fn create_default_database() -> Database {
 
 pub fn set_url_key(config: &mut Config, url_key: Option<String>, database: &Database) {
     config.url_key = match url_key {
-        Some(k) => Some(String::from(k)),
+        Some(k) => {
+            if k.is_empty() {
+                Some(Config::generate_manager_key().expect("Failed to generate URL key!"))
+            } else {
+                Some(String::from(k))
+            }
+        },
         None => {
             database.get_url_key()
                 .unwrap_or(Some(Config::generate_manager_key().expect("Failed to generate URL key!")))
@@ -312,7 +319,7 @@ pub fn set_url_key(config: &mut Config, url_key: Option<String>, database: &Data
     };
 }
 /// Create `Runtime` and `main` entry
-fn create(matches: &ArgMatches) -> Result<(Runtime, impl Future<Output = ExitCode>), ExitCode> {
+fn create(matches: &ArgMatches) -> ShadowsocksResult<(Runtime, impl Future<Output = ShadowsocksResult>)> {
     let key_binding = matches.get_one::<PathBuf>("URL_KEY").cloned()
         .or_else(|| {None});//.unwrap();
     let url_key = match key_binding {
@@ -341,7 +348,7 @@ fn create(matches: &ArgMatches) -> Result<(Runtime, impl Future<Output = ExitCod
                 Ok(c) => c,
                 Err(err) => {
                     eprintln!("loading config e {config_path:?}, {err}");
-                    return Err(crate::EXIT_CODE_LOAD_CONFIG_FAILURE.into());
+                    return Err(ShadowsocksError::LoadConfigFailure(format!("loading config {config_path:?}, {err}")));
                 }
             },
             None => ServiceConfig::default(),
@@ -383,7 +390,7 @@ fn create(matches: &ArgMatches) -> Result<(Runtime, impl Future<Output = ExitCod
                     Ok(cfg) => cfg,
                     Err(err) => {
                         eprintln!("Error loading config {cpath:?}, {err}");
-                        return Err(crate::EXIT_CODE_LOAD_CONFIG_FAILURE.into());
+                        return Err(ShadowsocksError::LoadConfigFailure(format!("loading config {cpath:?}, {err}")))?;
                     }
                 };
 
@@ -544,13 +551,8 @@ fn create(matches: &ArgMatches) -> Result<(Runtime, impl Future<Output = ExitCod
         }
 
         if let Some(acl_file) = matches.get_one::<String>("ACL") {
-            let acl = match AccessControl::load_from_file(acl_file) {
-                Ok(acl) => acl,
-                Err(err) => {
-                    eprintln!("loading ACL \"{acl_file}\", {err}");
-                    return Err(crate::EXIT_CODE_LOAD_ACL_FAILURE.into());
-                }
-            };
+            let acl = AccessControl::load_from_file(acl_file)
+                .map_err(|err| ShadowsocksError::LoadAclFailure(format!("loading ACL \"{acl_file}\", {err}")))?;
             config.acl = Some(acl);
         }
 
@@ -593,18 +595,14 @@ fn create(matches: &ArgMatches) -> Result<(Runtime, impl Future<Output = ExitCod
 
         // DONE reading options
 
-        if config.manager.is_none() {
-            eprintln!(
-                "missing `manager_address`, consider specifying it by --manager-address command line option, \
-                    or \"manager_address\" and \"manager_port\" keys in configuration file"
-            );
-            return Err(crate::EXIT_CODE_INSUFFICIENT_PARAMS.into());
-        }
+        config.manager.as_ref().ok_or_else(|| {
+            ShadowsocksError::InsufficientParams("missing `manager_address`, consider specifying it by --manager-address command line option, \
+                    or \"manager_address\" and \"manager_port\" keys in configuration file".to_string())
+        })?;
 
-        if let Err(err) = config.check_integrity() {
-            eprintln!("config integrity check failed, {err}");
-            return Err(crate::EXIT_CODE_LOAD_CONFIG_FAILURE.into());
-        }
+        config
+            .check_integrity()
+            .map_err(|err| ShadowsocksError::LoadConfigFailure(format!("config integrity check failed, {err}")))?;
 
         #[cfg(unix)]
         if matches.get_flag("DAEMONIZE") || matches.get_raw("DAEMONIZE_PID_PATH").is_some() {
@@ -614,10 +612,9 @@ fn create(matches: &ArgMatches) -> Result<(Runtime, impl Future<Output = ExitCod
 
         #[cfg(unix)]
         if let Some(uname) = matches.get_one::<String>("USER") {
-            if let Err(err) = crate::sys::run_as_user(uname) {
-                eprintln!("failed to change as user, error: {err}");
-                return Err(crate::EXIT_CODE_INSUFFICIENT_PARAMS.into());
-            }
+            crate::sys::run_as_user(uname).map_err(|err| {
+                ShadowsocksError::InsufficientParams(format!("failed to change as user, error: {err}"))
+            })?;
         }
 
         info!("shadowsocks manager {} build {}", crate::VERSION, crate::BUILD_TIME);
@@ -674,19 +671,15 @@ fn create(matches: &ArgMatches) -> Result<(Runtime, impl Future<Output = ExitCod
 
         match future::select(server, abort_signal).await {
             // Server future resolved without an error. This should never happen.
-            Either::Left((Ok(..), ..)) => {
-                eprintln!("server exited unexpectedly");
-                crate::EXIT_CODE_SERVER_EXIT_UNEXPECTEDLY.into()
-            }
+            Either::Left((Ok(..), ..)) => Err(ShadowsocksError::ServerExitUnexpectedly(
+                "server exited unexpectedly".to_owned(),
+            )),
             // Server future resolved with error, which are listener errors in most cases
-            Either::Left((Err(err), ..)) => {
-                eprintln!("server aborted with {err}");
-                crate::EXIT_CODE_SERVER_ABORTED.into()
-            }
+            Either::Left((Err(err), ..)) => Err(ShadowsocksError::ServerAborted(format!("server aborted with {err}"))),
             // The abort signal future resolved. Means we should just exit.
             Either::Right(_) => {
                 warn!("server exiting!");
-                ExitCode::SUCCESS
+                Ok(())
             },
         }
     };
@@ -697,9 +690,12 @@ fn create(matches: &ArgMatches) -> Result<(Runtime, impl Future<Output = ExitCod
 /// Program entrance `main`
 #[inline]
 pub fn main(matches: &ArgMatches) -> ExitCode {
-    match create(matches) {
-        Ok((runtime, main_fut)) => runtime.block_on(main_fut),
-        Err(code) => code,
+    match create(matches).and_then(|(runtime, main_fut)| runtime.block_on(main_fut)) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(err) => {
+            eprintln!("{err}");
+            err.exit_code().into()
+        }
     }
 }
 

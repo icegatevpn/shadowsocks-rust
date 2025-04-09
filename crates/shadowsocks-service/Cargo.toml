@@ -1,6 +1,6 @@
 [package]
 name = "shadowsocks-service"
-version = "1.22.0"
+version = "1.23.0"
 authors = ["Shadowsocks Contributors"]
 description = "shadowsocks is a fast tunnel proxy that helps you bypass firewalls."
 repository = "https://github.com/shadowsocks/shadowsocks-rust"
@@ -9,14 +9,13 @@ documentation = "https://docs.rs/shadowsocks-service"
 keywords = ["shadowsocks", "proxy", "socks", "socks5", "firewall"]
 license = "MIT"
 edition = "2021"
-rust-version = "1.80"
+rust-version = "1.83"
 
 [badges]
 maintenance = { status = "passively-maintained" }
 
 [features]
-# WARN: Just for compatible. May be removed in the future releases.
-default = ["aead-cipher"]
+default = ["hickory-dns", "aead-cipher"]
 
 full = [
     "local",
@@ -45,27 +44,13 @@ hickory-dns = ["hickory-resolver", "shadowsocks/trust-dns"]
 trust-dns = ["hickory-dns"]
 dns-over-tls = [
     "hickory-dns",
-    "hickory-resolver/dns-over-tls",
     "hickory-resolver/dns-over-rustls",
     "hickory-resolver/webpki-roots",
-    "hickory-resolver/native-certs",
-]
-dns-over-native-tls = [
-    "hickory-dns",
-    "hickory-resolver/dns-over-tls",
-    "hickory-resolver/dns-over-native-tls",
-]
-dns-over-native-tls-vendored = [
-    "hickory-dns",
-    "hickory-resolver/dns-over-tls",
-    "hickory-resolver/dns-over-native-tls",
-    "native-tls/vendored",
 ]
 dns-over-https = [
     "hickory-dns",
     "hickory-resolver/dns-over-https-rustls",
     "hickory-resolver/webpki-roots",
-    "hickory-resolver/native-certs",
 ]
 dns-over-h3 = ["hickory-dns", "hickory-resolver/dns-over-h3"]
 
@@ -100,7 +85,7 @@ local-socks4 = ["local"]
 # Enable Tun interface protocol for sslocal
 local-tun = ["local", "etherparse", "tun", "smoltcp"]
 # Enable Fake DNS
-local-fake-dns = ["local", "trust-dns", "sled", "bson"]
+local-fake-dns = ["local", "trust-dns", "rocksdb", "bson"]
 # sslocal support online URL (SIP008 Online Configuration Delivery)
 # https://shadowsocks.org/doc/sip008.html
 local-online-config = [
@@ -151,8 +136,8 @@ lru_time_cache = "0.11"
 bytes = "1.7"
 byte_string = "1.0"
 byteorder = "1.5"
-rand = { version = "0.8", features = ["small_rng"] }
-sled = { version = "0.34.7", optional = true }
+rand = { version = "0.9", features = ["small_rng"] }
+rocksdb = { version = "0.23", optional = true }
 
 futures = "0.3"
 tokio = { version = "1.38", features = [
@@ -183,7 +168,7 @@ http-body-util = { version = "0.1", optional = true }
 http = { version = "1.1", optional = true }
 httparse = { version = "1.9", optional = true }
 
-hickory-resolver = { version = "0.25.0-alpha", optional = true, features = [
+hickory-resolver = { version = "=0.25.0-alpha.5", optional = true, features = [
     "serde",
 ] }
 
@@ -197,8 +182,8 @@ flate2 = { version = "1.0", optional = true }
 brotli = { version = "7.0", optional = true }
 zstd = { version = "0.13", optional = true }
 
-tun = { version = "0.7", optional = true, features = ["async"] }
-etherparse = { version = "0.16", optional = true }
+tun = { git = "https://github.com/icegatevpn/rust-tun", version = "0.7.17", branch = "work", optional = true, features = ["async"] }
+etherparse = { version = "0.17", optional = true }
 smoltcp = { version = "0.12", optional = true, default-features = false, features = [
     "std",
     "log",
@@ -214,10 +199,10 @@ serde = { version = "1.0", features = ["derive"] }
 json5 = "0.4"
 bson = { version = "2.13.0", optional = true }
 #limbo = { git =  "https://github.com/tursodatabase/limbo", tag = "v0.0.10", package = "limbo_core"}
-rusqlite = { version = "0.32.1", features = ["chrono", "hooks"], optional = true}
+rusqlite = { version = "0.32.1", features = ["chrono", "hooks"], optional = true }
 #tokio-rusqlite = "0.6.0"
 
-shadowsocks = { version = "1.22.0", path = "../shadowsocks", default-features = false }
+shadowsocks = { version = "1.23.0", path = "../shadowsocks", default-features = false }
 chrono = { version = "0.4", features = ["serde"] }
 serde_json = "1.0.133"
 base64 = "0.22"

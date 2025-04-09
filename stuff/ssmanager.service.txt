@@ -1,0 +1,14 @@
+[Unit]
+Description=Shadowsocks Manager Service
+After=network.target
+
+[Service]
+Type=simple
+User=ssmanager
+WorkingDirectory=/home/ssmanager
+ExecStart=/home/ssmanager/ssmanager --config server_config.json  --log-config log4rs.yaml -D manager.db
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target

@@ -1,12 +1,9 @@
 use crate::config::{Config, ServerInstanceConfig};
+use crate::url_generator::generate_ssurl;
 use chrono::{NaiveDateTime, Utc};
 use log::{debug, error, warn};
-use rusqlite::{
-    params,
-    Connection, Error as RusqliteError, Error, OptionalExtension, Row,
-};
-use crate::url_generator::{generate_ssurl};
 use rusqlite::hooks::Action;
+use rusqlite::{params, Connection, Error as RusqliteError, Error, OptionalExtension, Row};
 use serde::{Deserialize, Serialize};
 use shadowsocks::config::{Mode, ServerConfig as SSServerConfig, ServerUser, ServerUserManager, ServerWeight};
 use shadowsocks::crypto::CipherKind;
@@ -16,7 +13,7 @@ use shadowsocks::ServerAddr;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::Path;
-use std::time::{Duration};
+use std::time::Duration;
 use tokio::sync::broadcast;
 
 #[derive(Debug, Clone)]
@@ -186,7 +183,6 @@ impl std::fmt::Display for KeyError {
 }
 impl std::error::Error for KeyError {}
 
-
 #[derive(Debug, Deserialize)]
 pub struct SsUrlParams {
     pub server_address: String,
@@ -225,7 +221,6 @@ pub struct UserConfig {
     #[serde(skip_serializing)]
     pub updated_at: Option<NaiveDateTime>,
 }
-
 
 #[derive(Debug)]
 pub struct Database {
@@ -413,10 +408,6 @@ impl Database {
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_servers_ip_port ON servers(ip_address, port)",
             [],
         )?;
-        tx.execute(
-            "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_name_server ON users(name, server_port)",
-            [],
-        )?;
         tx.commit()?;
         Ok(())
     }
@@ -425,7 +416,7 @@ impl Database {
         // Try to update first
         let mut stmt = self.conn.prepare(
             "UPDATE config SET url_key = ?1, updated_at = CURRENT_TIMESTAMP
-             WHERE name = 'manager_config'"
+             WHERE name = 'manager_config'",
         )?;
 
         let rows = stmt.execute(params![url_key])?;
@@ -434,7 +425,7 @@ impl Database {
             // If no rows were updated, insert new record
             let mut stmt = self.conn.prepare(
                 "INSERT INTO config (name, config, url_key)
-                 VALUES ('manager_config', '{}', ?1)"
+                 VALUES ('manager_config', '{}', ?1)",
             )?;
             stmt.execute(params![url_key])?;
         }
@@ -443,12 +434,11 @@ impl Database {
     }
 
     pub fn get_url_key(&self) -> Result<Option<String>, RusqliteError> {
-        let mut stmt = self.conn.prepare(
-            "SELECT url_key FROM config WHERE name = 'manager_config'"
-        )?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT url_key FROM config WHERE name = 'manager_config'")?;
 
-        let url_key = stmt.query_row(params![], |row| row.get(0))
-            .optional()?;
+        let url_key = stmt.query_row(params![], |row| row.get(0)).optional()?;
 
         Ok(url_key)
     }
@@ -456,16 +446,15 @@ impl Database {
     pub fn save_config_to_tables(&mut self, config: &Config) -> Result<(), RusqliteError> {
         // Start a transaction to ensure all operations succeed or fail together
         let tx = self.conn.transaction()?;
-        warn!("<<<<<<<<<< save key:: {:?}", config.url_key);
         // Add config
         tx.execute(
             "INSERT OR REPLACE INTO config (name, config, url_key)
                  VALUES (?1, ?2, ?3)",
             params![
-                    "manager_config",
-                    config.to_string(),
-                    &config.url_key.clone().unwrap_or("".to_string()),
-                ],
+                "manager_config",
+                config.to_string(),
+                &config.url_key.clone().unwrap_or("".to_string()),
+            ],
         )?;
 
         // First save any servers from the config
@@ -480,12 +469,18 @@ impl Database {
 
             // Add the server
             tx.execute(
-                "INSERT OR REPLACE INTO servers (
-                    ip_address, port, method, mode, key, active
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                "INSERT INTO servers (
+                ip_address, port, method, mode, key, active
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+            ON CONFLICT(port) DO UPDATE SET
+                ip_address=?1,
+                method=?3,
+                mode=?4,
+                key=?5,
+                active=?6",
                 params![
                     ip_address,
-                    port,
+                    port as u32,
                     server.method().to_string(),
                     server.mode().to_string(),
                     server.password().to_string(),
@@ -683,7 +678,6 @@ impl Database {
                     udp_weight: row.get(10)?,
                     // todo populate the rest of these fields from the db, Im currently only using the
                     // ip_address, and method for generation a connection URL for users
-
                     plugin: None,
                     plugin_opts: None,
                     plugin_args: None,
@@ -793,10 +787,9 @@ impl Database {
     }
 
     pub fn remove_user(&mut self, id: i64) -> Result<usize, RusqliteError> {
-        let ss = self.conn.execute(
-            "DELETE FROM users WHERE id = ?2",
-            params![Utc::now().naive_utc(), id],
-        )?;
+        let ss = self
+            .conn
+            .execute("DELETE FROM users WHERE id = ?2", params![Utc::now().naive_utc(), id])?;
 
         Ok(ss)
     }
@@ -862,7 +855,10 @@ impl Database {
                     Ok(url) => Some(url),
                     Err(_) => Some("Error generating URL".to_string()),
                 };
-                Ok((self.build_user_from_row(row)?, (row.get::<usize, String>(8)?, url, server_key.clone())))
+                Ok((
+                    self.build_user_from_row(row)?,
+                    (row.get::<usize, String>(8)?, url, server_key.clone()),
+                ))
             })?
             .collect::<Result<Vec<_>, _>>()?;
 
@@ -1043,19 +1039,6 @@ impl Database {
 
         let tx = self.conn.transaction()?;
 
-        // Verify name and port combination is unique
-        let name_exists: bool = tx.query_row(
-            "SELECT EXISTS(SELECT 1 FROM users WHERE name = ? AND server_port = ?)",
-            params![name, server_port],
-            |row| row.get(0),
-        )?;
-
-        if name_exists {
-            return Err(Error::InvalidParameterName(
-                "User name already exists for this server".into(),
-            ));
-        }
-
         // Get current timestamp
         let now = Utc::now().naive_utc();
 
@@ -1172,8 +1155,9 @@ impl Database {
 
 #[cfg(test)]
 mod tests {
+    use super::Config;
+    use base64::engine::general_purpose::URL_SAFE;
     use base64::Engine;
-    use super::*;
 
     #[test]
     fn test_generate_manager_key() {
@@ -1197,8 +1181,8 @@ mod tests {
         let key = Config::generate_manager_key().unwrap();
 
         // Check that the key only contains valid URL-safe base64 characters
-        assert!(key.chars().all(|c| {
-            c.is_ascii_alphanumeric() || c == '-' || c == '_'
-        }));
+        assert!(key
+            .chars()
+            .all(|c| { c.is_ascii_alphanumeric() || c == '-' || c == '_' }));
     }
 }

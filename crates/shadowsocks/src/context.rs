@@ -12,6 +12,8 @@ use crate::{
     security::replay::ReplayProtector,
 };
 
+const MAX_PREFIX_LEN: usize = 8;
+
 /// Service context
 #[derive(Debug)]
 pub struct Context {
@@ -58,6 +60,20 @@ impl Context {
             _ => self.replay_protector.check_nonce_and_set(method, nonce),
         }
     }
+    fn gen_printable_prefix(nonce: &mut [u8]) {
+        // TLS ClientHello: 16:03:01:00:a8:01:01
+        const PREFIX: &[u8] = &[0x16, 0x03, 0x01, 0x00, 0xa8, 0x01, 0x01];
+
+        // Compile-time assertion to check the prefix length
+        const _: () = assert!(
+            PREFIX.len() <= MAX_PREFIX_LEN,
+            "Prefix length exceeds maximum allowed length (8)"
+        );
+
+        if nonce.len() >= PREFIX.len() {
+            nonce[..PREFIX.len()].copy_from_slice(PREFIX);
+        }
+    }
 
     /// Generate nonce (IV or SALT)
     pub fn generate_nonce(&self, method: CipherKind, nonce: &mut [u8], unique: bool) {
@@ -70,6 +86,8 @@ impl Context {
             use crate::crypto::utils::random_iv_or_salt;
 
             random_iv_or_salt(nonce);
+            // generate printable prefix
+            Self::gen_printable_prefix(nonce);
 
             // Salt already exists, generate a new one.
             if unique && self.check_nonce_and_set(method, nonce) {

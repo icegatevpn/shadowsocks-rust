@@ -9,7 +9,6 @@ use std::{
 use arc_swap::ArcSwapAny;
 use bytes::Bytes;
 use futures::ready;
-use log::debug;
 use pin_project::pin_project;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use crate::{
@@ -69,8 +68,8 @@ impl<S> ProxyServerStream<S> {
         #[cfg(not(feature = "aead-cipher-2022"))]
         let writer_state = ProxyServerStreamWriteState::Established;
 
-        static EMPTY_IDENTITY: [Bytes; 0] = [];
-        debug!("+++++++++++++++++++++");
+        const EMPTY_IDENTITY: [Bytes; 0] = [];
+
         ProxyServerStream {
             stream: CryptoStream::from_stream_with_identity(
                 &context,

@@ -8,7 +8,7 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build-cross:
+  build-nightly-cross:
     runs-on: ubuntu-latest
     env:
       RUST_BACKTRACE: full
@@ -20,6 +20,12 @@ jobs:
             toolchain: stable
           - target: aarch64-unknown-linux-musl
             toolchain: stable
+          - target: mips-unknown-linux-gnu
+            toolchain: nightly
+          - target: mipsel-unknown-linux-gnu
+            toolchain: nightly
+          - target: mips64el-unknown-linux-gnuabi64
+            toolchain: nightly
 
     steps:
       - uses: actions/checkout@v4
@@ -64,7 +70,7 @@ jobs:
           name: ${{ matrix.platform.target }}
           path: build/release/*
 
-  build-unix:
+  build-nightly-unix:
     runs-on: ${{ matrix.os }}
     env:
       BUILD_EXTRA_FEATURES: "full"
@@ -105,7 +111,7 @@ jobs:
           name: ${{ matrix.target }}
           path: build/release/*
 
-  build-windows:
+  build-nightly-windows:
     runs-on: windows-latest
     env:
       RUSTFLAGS: "-C target-feature=+crt-static"

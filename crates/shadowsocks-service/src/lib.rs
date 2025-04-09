@@ -66,13 +66,13 @@ mod dns;
 pub mod local;
 #[cfg(feature = "manager")]
 pub mod manager;
+#[cfg(feature = "database")]
+pub mod mysql_db;
 pub mod net;
 #[cfg(feature = "server")]
 pub mod server;
 mod sys;
 mod utils;
-#[cfg(feature = "database")]
-pub mod mysql_db;
 // mod tokio_mysql_db;
 pub mod url_generator;
 // Not sure if we relly need or want the database monitor, but I'm holding onto this for now.
@@ -83,10 +83,42 @@ pub mod url_generator;
 const DEFAULT_UDP_EXPIRY_DURATION: Duration = Duration::from_secs(5 * 60);
 
 #[macro_export]
-macro_rules! me_debug {
+macro_rules! my_debug {
     ( $( $x:expr ),* ) => {
         {
             log::debug!("<<<< {}", format!($( $x ),*));
+        }
+    };
+}
+#[macro_export]
+macro_rules! my_warn {
+    ( $( $x:expr ),* ) => {
+        {
+            log::warn!("<<<< {}", format!($( $x ),*));
+        }
+    };
+}
+#[macro_export]
+macro_rules! my_trace {
+    ( $( $x:expr ),* ) => {
+        {
+            log::trace!("<<<< {}", format!($( $x ),*));
+        }
+    };
+}
+#[macro_export]
+macro_rules! my_error {
+    ( $( $x:expr ),* ) => {
+        {
+            log::error!("<<<< {}", format!($( $x ),*));
+        }
+    };
+}
+#[macro_export]
+macro_rules! my_info {
+    ( $( $x:expr ),* ) => {
+        {
+            log::info!("<<<< {}", format!($( $x ),*));
         }
     };
 }

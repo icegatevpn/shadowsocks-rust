@@ -56,6 +56,8 @@ use std::{
     string::ToString,
     time::Duration,
 };
+#[cfg(all(feature = "local-tun", unix))]
+use std::os::fd::RawFd;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE;
 use cfg_if::cfg_if;
@@ -66,8 +68,8 @@ use ipnet::IpNet;
 #[cfg(feature = "local-fake-dns")]
 use ipnet::{Ipv4Net, Ipv6Net};
 use log::warn;
-use rand::RngCore;
 use rand::rngs::OsRng;
+use rand::TryRngCore;
 use serde::{Deserialize, Serialize};
 #[cfg(any(feature = "local-tunnel", feature = "local-dns"))]
 use shadowsocks::relay::socks5::Address;
@@ -322,6 +324,9 @@ struct SSLocalExtConfig {
     #[cfg(all(feature = "local-tun", unix))]
     #[serde(skip_serializing_if = "Option::is_none")]
     tun_device_fd_from_path: Option<String>,
+    #[cfg(all(feature = "local-tun", unix))]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tun_device_fd: Option<RawFd>,
 
     /// SOCKS5
     #[cfg(feature = "local")]
@@ -1824,6 +1829,10 @@ impl Config {
                         if let Some(tun_device_fd_from_path) = local.tun_device_fd_from_path {
                             local_config.tun_device_fd_from_path = Some(From::from(tun_device_fd_from_path));
                         }
+                        #[cfg(all(feature = "local-tun", unix))]
+                        if let Some(tun_device_fd) = local.tun_device_fd {
+                            local_config.tun_device_fd = Some(From::from(tun_device_fd));
+                        }
 
                         #[cfg(feature = "local")]
                         if let Some(socks5_auth_config_path) = local.socks5_auth_config_path {
@@ -2479,10 +2488,7 @@ impl Config {
 
             #[cfg(feature = "hickory-dns")]
             "google" => DnsConfig::HickoryDns(ResolverConfig::google()),
-            #[cfg(all(
-                feature = "hickory-dns",
-                any(feature = "dns-over-tls", feature = "dns-over-native-tls")
-            ))]
+            #[cfg(all(feature = "hickory-dns", feature = "dns-over-tls"))]
             "google_tls" => DnsConfig::HickoryDns(ResolverConfig::google_tls()),
             #[cfg(all(feature = "hickory-dns", feature = "dns-over-https"))]
             "google_https" => DnsConfig::HickoryDns(ResolverConfig::google_https()),
@@ -2491,20 +2497,14 @@ impl Config {
 
             #[cfg(feature = "hickory-dns")]
             "cloudflare" => DnsConfig::HickoryDns(ResolverConfig::cloudflare()),
-            #[cfg(all(
-                feature = "hickory-dns",
-                any(feature = "dns-over-tls", feature = "dns-over-native-tls")
-            ))]
+            #[cfg(all(feature = "hickory-dns", feature = "dns-over-tls"))]
             "cloudflare_tls" => DnsConfig::HickoryDns(ResolverConfig::cloudflare_tls()),
             #[cfg(all(feature = "hickory-dns", feature = "dns-over-https"))]
             "cloudflare_https" => DnsConfig::HickoryDns(ResolverConfig::cloudflare_https()),
 
             #[cfg(feature = "hickory-dns")]
             "quad9" => DnsConfig::HickoryDns(ResolverConfig::quad9()),
-            #[cfg(all(
-                feature = "hickory-dns",
-                any(feature = "dns-over-tls", feature = "dns-over-native-tls")
-            ))]
+            #[cfg(all(feature = "hickory-dns", feature = "dns-over-tls"))]
             "quad9_tls" => DnsConfig::HickoryDns(ResolverConfig::quad9_tls()),
             #[cfg(all(feature = "hickory-dns", feature = "dns-over-https"))]
             "quad9_https" => DnsConfig::HickoryDns(ResolverConfig::quad9_https()),
@@ -2952,6 +2952,11 @@ impl fmt::Display for Config {
                             .tun_device_fd_from_path
                             .as_ref()
                             .map(|p| p.to_str().expect("tun_device_fd_from_path is not utf-8").to_owned()),
+                        #[cfg(all(feature = "local-tun", unix))]
+                        tun_device_fd: local
+                            .tun_device_fd,
+                            //.as_ref()
+                            //.map(|p| p.to_str().expect("tun_device_fd is not RawFd").to_owned()),
 
                         #[cfg(feature = "local")]
                         socks5_auth_config_path: None,

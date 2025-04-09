@@ -13,7 +13,6 @@ use std::{
     thread::{self, JoinHandle, Thread},
     time::Duration,
 };
-
 use log::{debug, error, trace};
 use shadowsocks::{net::TcpSocketOpts, relay::socks5::Address};
 use smoltcp::{
@@ -25,11 +24,7 @@ use smoltcp::{
     wire::{HardwareAddress, IpAddress, IpCidr, Ipv4Address, Ipv6Address, TcpPacket},
 };
 use spin::Mutex as SpinMutex;
-use tokio::{
-    io::{AsyncRead, AsyncWrite, ReadBuf},
-    sync::{mpsc, oneshot},
-};
-
+use tokio::{io::{AsyncRead, AsyncWrite, ReadBuf}, sync::{mpsc, oneshot}};
 use crate::{
     local::{
         context::ServiceContext,
@@ -38,7 +33,6 @@ use crate::{
         utils::{establish_tcp_tunnel, establish_tcp_tunnel_bypassed},
     }, net::utils::to_ipv4_mapped
 };
-
 use super::virt_device::VirtTunDevice;
 
 // NOTE: Default buffer could contain 20 AEAD packets
@@ -258,7 +252,6 @@ impl Drop for TcpTun {
 
 impl TcpTun {
     pub fn new(context: Arc<ServiceContext>, balancer: PingBalancer, mtu: u32) -> TcpTun {
-        debug!("<<< TcpTun");
         let mut capabilities = DeviceCapabilities::default();
         capabilities.medium = Medium::Ip;
         capabilities.max_transmission_unit = mtu as usize;
@@ -557,7 +550,7 @@ impl TcpTun {
 
     pub async fn drive_interface_state(&mut self, frame: &[u8]) {
         if self.iface_tx.send(frame.to_vec()).is_err() {
-            panic!("interface send channel closed unexpectly");
+            panic!("interface send channel closed unexpectedly");
         }
 
         // Wake up and poll the interface.
@@ -576,7 +569,7 @@ impl TcpTun {
 /// Established Client Transparent Proxy
 ///
 /// This method must be called after handshaking with client (for example, socks5 handshaking)
-async fn establish_client_tcp_redir<'a>(
+async fn establish_client_tcp_redir(
     context: Arc<ServiceContext>,
     balancer: PingBalancer,
     mut stream: TcpConnection,
@@ -593,6 +586,8 @@ async fn establish_client_tcp_redir<'a>(
 
     let mut remote =
         AutoProxyClientStream::connect_with_opts(context, &server, addr, server.connect_opts_ref()).await?;
+
+
     establish_tcp_tunnel(svr_cfg, &mut stream, &mut remote, peer_addr, addr).await
 }
 

@@ -1,18 +1,17 @@
-use log::{debug, error, info};
-use shadowsocks::config::Mode;
-use shadowsocks_service::config::Config;
-use shadowsocks_service::local::context::ServiceContext;
-use shadowsocks_service::local::loadbalancing::{PingBalancerBuilder};
-use shadowsocks_service::local::tun::{StaticDeviceNetHelper, TunBuilder};
-use std::{io, sync::Arc};
-use std::fmt::Debug;
-use tokio::sync::Mutex;
+use clap::Command;
 use ipnet::IpNet;
-use futures::executor::block_on;
+use serde_json::{json, Value};
+use shadowsocks::relay::udprelay::DatagramReceiveExt;
+use shadowsocks_rust::service::local;
+use shadowsocks_rust::VERSION;
+use shadowsocks_service::{my_debug, my_error, my_info, my_warn};
+use std::fmt::{Debug};
+use std::{io, sync::Arc};
+use log::{error, info};
+use tokio::sync::{mpsc, oneshot, Mutex};
 
 #[derive(Debug)]
 pub enum TunError {
-    IoError(io::Error),
     ConfigError(&'static str),
     DeviceError(&'static str),
 }
@@ -74,107 +73,146 @@ impl Debug for TunDeviceConfig {
             .field("fd", &self.fd)
             .field("mtu", &self.mtu)
             .finish()
-
     }
 }
 #[derive(Clone)]
 pub struct MobileTunDevice {
-    // Store the builder until we're ready to build
-    device: Arc<Mutex<Option<TunBuilder>>>,
+    pub config: String,
     pub status: Arc<Mutex<VPNStatus>>,
+    shutdown_signal: Arc<Mutex<Option<oneshot::Sender<()>>>>,
 }
 
 impl MobileTunDevice {
     pub async fn get_status_async(&self) -> VPNStatus {
         self.status.lock().await.clone()
     }
+
     async fn update_status(&self, status: VPNStatus) {
         let mut gg = self.status.lock().await;
         *gg = status;
     }
 
-    pub async fn new(tun_config: TunDeviceConfig, config: Config) -> Result<Self, TunError> {
-        debug!("Creating TUN device with config: {:?}", tun_config);
-
-        // Create a TunBuilder using the existing shadowsocks implementation
-        let context = Arc::new(ServiceContext::new());
-        let mut balancer_builder = PingBalancerBuilder::new(
-            context.clone(),
-            Mode::TcpAndUdp,
-        );
-
-        // Add servers from config
-        for server in &config.server {
-            balancer_builder.add_server(server.clone());
+    fn add_tun_device_fd_to_config(config_json: &str, fd: i32) -> Result<String, io::Error> {
+        // Parse the JSON input
+        let mut config: Value = serde_json::from_str(config_json)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("Invalid JSON: {}", e)))?;
+        // Handle different config formats
+        if cfg!(target_os = "ios") || cfg!(target_os = "tvos") {
+            // I don't know how to add this to the json in swift,
+            // this just prevents local from initializing logging again, which crashes the service
+            config["rust_log_lvl"] = json!("none");
         }
-        // Build the balancer
-        let balancer = balancer_builder.build().await.map_err(|e| {
-            error!("Failed to build balancer: {:?}", e);
-            TunError::ConfigError("Failed to create balancer")
+        if let Some(locals) = config.get_mut("locals").and_then(Value::as_array_mut) {
+            // Config format with "locals" array
+            let mut found_tun = false;
+
+            // Try to find a TUN local config
+            for local in locals.iter_mut() {
+                if let Some(protocol) = local.get("protocol") {
+                    if protocol.as_str() == Some("tun") {
+                        // Found a TUN config, update or add the fd
+                        local["tun_device_fd"] = json!(fd);
+                        found_tun = true;
+                        break;
+                    }
+                }
+            }
+        }
+
+        // Serialize back to string
+        serde_json::to_string(&config)
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("Failed to serialize JSON: {}", e)))
+    }
+
+    pub async fn new(fd: i32, config: &str) -> Result<Self, TunError> {
+        my_debug!("Creating TUN device with fd: {:?}", fd);
+        let updated_config = Self::add_tun_device_fd_to_config(config, fd).map_err(|err| {
+            my_error!("Failed to update config: {}", err);
+            TunError::ConfigError("Failed to update config")
         })?;
-
-        // Create TunBuilder
-        let mut builder = TunBuilder::new(context.clone(), balancer);
-        builder.file_descriptor(tun_config.fd);
-        builder.address(tun_config.address);
-        if let Some(dest) = tun_config.destination {
-            builder.destination(dest);
-        }
-        // Create the network helper with the configured addresses
-        let net_helper = StaticDeviceNetHelper::new(
-            tun_config.address.addr(),
-            tun_config.address.netmask()
-        );
-        builder.with_net_helper(net_helper);
-
-        builder.mode(Mode::TcpAndUdp);
-        builder.name("shadowsocks-rust-tun-device");
-
         Ok(MobileTunDevice {
-            device: Arc::new(Mutex::new(Some(builder))),
+            config: updated_config,
             status: Arc::new(Mutex::new(VPNStatus::new(VPNStatusCode::Started, None))),
+            shutdown_signal: Arc::new(Mutex::new(None)),
         })
     }
 
     pub async fn start_tunnel(&self) -> Result<(), TunError> {
-        info!("Starting TUN tunnel");
         self.update_status(VPNStatus::connecting()).await;
+        let mut app = Command::new("shadowsocks").version(VERSION);
+        app = local::define_command_line_options(app);
 
-        let mut device_lock = self.device.lock().await;
+        let matches = app
+            .try_get_matches_from::<_, &str>(vec!["shadowsocks"])
+            .expect("no matches :(");
+        let create_result = local::create(&matches, Some(&self.config));
+        match create_result {
+            Ok((config, runtime, kill_switch, main_fut)) => {
+                let status_clone = self.status.clone();
+                {
+                    let mut signal = self.shutdown_signal.lock().await;
+                    *signal = Some(kill_switch);
+                }
+                std::thread::spawn(move || {
+                    my_info!("Starting Shadowsocks service in background thread");
 
-        // Take the builder out of the Option
-        if let Some(builder) = device_lock.take() {
-            let tun = builder.build().await.map_err( |e|  {
-                error!("Failed to build TUN device: {:?}", e);
-                block_on(async move {
-                    self.update_status(VPNStatus::error(&format!("Failed to build TUN device: {:?}", e))).await;
+                    let result = match runtime.block_on(async {
+                        main_fut.await
+                    }) {
+                        Ok(_) => {
+                            info!("Shadowsocks service completed successfully");
+                            VPNStatus::disconnected()
+                        },
+                        Err(err) => {
+                            error!("Shadowsocks service error: {}", err);
+                            VPNStatus::error("Shadowsocks service error")
+                        },
+                    };
+
+                    runtime.block_on(async {
+                        let mut status = status_clone.lock().await;
+                        *status = result;
+                    });
+
+                    // Runtime will be dropped here, cleaning up any remaining tasks
                 });
-                TunError::DeviceError("Failed to create TUN device")
-            }).expect("Failed to build TUN device");
 
-            // Release the lock before running
-            drop(device_lock);
+                // Wait a short time to see if the service starts successfully
+                tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
-            self.update_status(VPNStatus::connected()).await;
+                self.update_status(VPNStatus::connected()).await;
 
-            // Run the TUN device
-            match tun.run().await {
-                Ok(_) => {
-                    let status = VPNStatus::disconnected();
-                    self.update_status(status.clone()).await;
-                    Ok(())
-                }
-                Err(e) => {
-                    let status = VPNStatus::error(&format!("Failed to run TUN device: {:?}", e));
-                    self.update_status(status.clone()).await;
-                    Err(TunError::IoError(e))
-
-                }
+                // No need to join the thread here - it should run independently
+                Ok(())
             }
+            Err(err) => {
+                let err_msg = format!("Failed to create Shadowsocks service: {}", err);
+                my_error!("{}", err_msg);
+                self.update_status(VPNStatus::error(&err_msg)).await;
+                Err(TunError::DeviceError("Failed to create Shadowsocks service"))
+            }
+        }
+    }
+
+    pub async fn cancel(&self) -> Result<(), TunError> {
+        my_info!("Cancelling TUN tunnel");
+
+        // Get the shutdown sender if available
+        let mut signal = self.shutdown_signal.lock().await;
+
+        if let Some(tx) = signal.take() {
+            // Send the shutdown signal
+            if let Err(err) = tx.send(()) {
+                my_warn!("Failed to send shutdown signal");
+                // Continue anyway - the receiver might be dropped if the task completed naturally
+            }
+
+            // Update status to disconnected
+            self.update_status(VPNStatus::disconnected()).await;
+            Ok(())
         } else {
-            let status = VPNStatus::error("TUN device already started");
-            self.update_status(status.clone()).await;
-            Err(TunError::DeviceError("TUN device already started"))
+            my_warn!("No active tunnel to cancel");
+            Ok(())
         }
     }
 }

@@ -5,7 +5,8 @@
     target_os = "android",
     target_os = "macos",
     target_os = "ios",
-    target_os = "freebsd"
+    target_os = "freebsd",
+    target_os = "tvos",
 ))]
 use std::io::{ErrorKind, IoSlice, IoSliceMut};
 use std::{
@@ -30,7 +31,8 @@ use futures::ready;
     target_os = "android",
     target_os = "macos",
     target_os = "ios",
-    target_os = "freebsd"
+    target_os = "freebsd",
+    target_os = "tvos",
 ))]
 use tokio::io::Interest;
 use tokio::{io::ReadBuf, net::ToSocketAddrs};
@@ -48,7 +50,8 @@ use super::{
     target_os = "android",
     target_os = "macos",
     target_os = "ios",
-    target_os = "freebsd"
+    target_os = "freebsd",
+    target_os = "tvos",
 ))]
 pub struct BatchSendMessage<'a> {
     /// Optional target address
@@ -65,7 +68,8 @@ pub struct BatchSendMessage<'a> {
     target_os = "android",
     target_os = "macos",
     target_os = "ios",
-    target_os = "freebsd"
+    target_os = "freebsd",
+    target_os = "tvos"
 ))]
 pub struct BatchRecvMessage<'a> {
     /// Peer address
@@ -164,6 +168,12 @@ impl UdpSocket {
                 socket,
                 mtu: opts.udp.mtu,
             })
+    }
+
+    /// Binds to a specific address as an outbound socket
+    #[inline]
+    pub async fn bind(addr: &SocketAddr) -> io::Result<UdpSocket> {
+        UdpSocket::bind_with_opts(addr, &ConnectOpts::default()).await
     }
 
     /// Binds to a specific address with opts as an outbound socket
@@ -342,7 +352,8 @@ impl UdpSocket {
         target_os = "android",
         target_os = "ios",
         target_os = "macos",
-        target_os = "freebsd"
+        target_os = "freebsd",
+        target_os = "tvos"
     ))]
     pub fn poll_batch_recv(
         &self,

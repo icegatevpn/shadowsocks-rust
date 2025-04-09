@@ -151,10 +151,10 @@ pub async fn create_resolver(
         }
 
         // To make this independent, if targeting macOS, BSD, Linux, or Windows, we can use the system's configuration
-        // Android doesn't have /etc/resolv.conf.
+        // Android and TVOS don't have /etc/resolv.conf.
         None => {
             cfg_if! {
-                if #[cfg(any(all(unix, not(target_os = "android")), windows))] {
+                if #[cfg(any(all(unix, not(target_os = "android"), not(target_os = "tvos")), windows))] {
                     use hickory_resolver::system_conf::read_system_conf;
 
                     // use the system resolver configuration

@@ -14,7 +14,7 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build-cross:
+  build-release-cross:
     runs-on: ubuntu-latest
     env:
       RUST_BACKTRACE: full
@@ -46,16 +46,13 @@ jobs:
             toolchain: stable
           - target: aarch64-unknown-linux-musl
             toolchain: stable
-          # FIXME: moka uses atomic64 by default
-          # - target: mips-unknown-linux-gnu
-          #   toolchain: nightly
+          - target: mips-unknown-linux-gnu
+            toolchain: nightly
           # cross mips-*-musl images are disabled
           # - target: mips-unknown-linux-musl
           #   toolchain: nightly
-          # FIXME: moka uses atomic64 by default
-          # - target: mipsel-unknown-linux-gnu
-          #   toolchain: nightly
-          # cross mips-*-musl images are disabled
+          - target: mipsel-unknown-linux-gnu
+            toolchain: nightly
           # - target: mipsel-unknown-linux-musl
           #   toolchain: nightly
           # FIXME: ring doesn't support mips64 CPU
@@ -63,8 +60,8 @@ jobs:
           #   toolchain: nightly
           # - target: mips64-unknown-linux-muslabi64
           #   toolchain: nightly
-          # - target: mips64el-unknown-linux-gnuabi64
-          #   toolchain: nightly
+          - target: mips64el-unknown-linux-gnuabi64
+            toolchain: nightly
           # FIXME: Link Error. 
           #   = note: mips64el-linux-muslsf-gcc: error: crt1.o: No such file or directory
           #           mips64el-linux-muslsf-gcc: error: crti.o: No such file or directory
@@ -120,7 +117,7 @@ jobs:
           prerelease: ${{ contains(github.ref_name, '-') }}
           tag_name: ${{ inputs.tag || github.ref_name }}
 
-  build-unix:
+  build-release-unix:
     runs-on: ${{ matrix.os }}
     env:
       BUILD_EXTRA_FEATURES: "full"
@@ -165,7 +162,7 @@ jobs:
           prerelease: ${{ contains(github.ref_name, '-') }}
           tag_name: ${{ inputs.tag || github.ref_name }}
 
-  build-windows:
+  build-release-windows:
     runs-on: windows-latest
     env:
       RUSTFLAGS: "-C target-feature=+crt-static"

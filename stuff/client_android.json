@@ -1,54 +1,33 @@
-[
-	{
-		"server": "165.232.76.105",
-		"server_port": 8389,
-		"password": "IXI89vHsloGmeReGjl79XVtGRKzIIqhFWdf3KoH/NnM=",
-		"method": "aes-256-gcm",
-		"dns": "system",
-		"mode": "tcp_and_udp",
-		"locals": [
-			{
-				"local_address": "127.0.0.1",
-				"local_port": 1080,
-				"local_udp_address": "127.0.0.1",
-				"local_udp_port": 1080,
-				"mode": "tcp_and_udp"
-			},
-			{
-				"local_address": "127.0.0.1",
-				"local_port": 5450,
-				"local_dns_address": "local_dns_path",
-				"remote_dns_address": "dns.google",
-				"remote_dns_port": 53,
-				"protocol": "dns"
-			}
-		]
-	},
-	
-	
-	{
-		"server": "165.232.76.105",
-		"server_port": 8389,
-		"password": "IXI89vHsloGmeReGjl79XVtGRKzIIqhFWdf3KoH/NnM=",
-		"method": "aes-256-gcm",
-		"dns": "system",
-		"mode": "tcp_and_udp",
-		"locals": [
-			{
-				"local_address": "127.0.0.1",
-				"local_port": 1080,
-				"local_udp_address": "127.0.0.1",
-				"local_udp_port": 1080,
-				"mode": "tcp_and_udp"
-			},
-			{
-				"local_address": "127.0.0.1",
-				"local_port": 5450,
-				"local_dns_address": "local_dns_path",
-				"remote_dns_address": "dns.google",
-				"remote_dns_port": 53,
-				"protocol": "tun"
-			}
-		]
-	}
-]
+
+{
+  "protocol": "tun",
+  "name": "IG_8264280856172929_1163",
+  "server": "46.249.35.130",
+  "server_port": 8765,
+  "password": "yJxlMnbXB0fpbQ+YfBwmV4GVr1ndRbsEJXdrJFQNeRE=:aj0Wg39ZA/h6dUuZr60T3kMHRpQQDIivPeSOYi397C4=",
+  "method": "2022-blake3-aes-256-gcm",
+  "mode": "tcp_and_udp",
+  "rust_log_lvl": "debug",
+  "locals": [
+    {
+      "local_address": "127.0.0.1",
+      "local_port": 1080,
+      "local_udp_address": "127.0.0.1",
+      "local_udp_port": 1080,
+      "mode": "tcp_and_udp"
+    },
+    {
+      "local_address": "127.0.0.1",
+      "local_port": 5450,
+      "local_dns_address": "local_dns_path",
+      "remote_dns_address": "dns.google",
+      "remote_dns_port": 53,
+      "protocol": "dns"
+    }
+  ]
+}
+
+shadowsocks_service::local::tun: !! tun config: Configuration { tun_name: Some("shadowsocks-rust-tun-device"), platform_config: PlatformConfig, address: Some(10.1.10.2), destination: Some(0.0.0.0), broadcast: None, netmask: Some(255.255.255.0), mtu: None, enabled: Some(true), layer: Some(L3), queues: None, raw_fd: Some(73), close_fd_on_drop: None }
+
+
+!! tun config: Configuration { tun_name: None, platform_config: PlatformConfig { packet_information: true, enable_routing: true }, address: None, destination: None, broadcast: None, netmask: None, mtu: None, enabled: Some(true), layer: Some(L3), queues: None, raw_fd: None, close_fd_on_drop: None }

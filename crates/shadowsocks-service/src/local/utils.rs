@@ -2,7 +2,7 @@
 
 use std::{io, net::SocketAddr, time::Duration};
 
-use log::{debug, trace};
+use log::{debug, error, trace};
 use shadowsocks::{
     config::ServerConfig,
     relay::{socks5::Address, tcprelay::utils::copy_encrypted_bidirectional},
@@ -12,8 +12,9 @@ use tokio::{
     time,
 };
 
+use crate::local::net::tcp::auto_proxy_stream::DebugStatus;
 use crate::local::net::AutoProxyIo;
-use crate::me_debug;
+use crate::my_debug;
 
 pub(crate) async fn establish_tcp_tunnel<P, S>(
     svr_cfg: &ServerConfig,
@@ -24,10 +25,10 @@ pub(crate) async fn establish_tcp_tunnel<P, S>(
 ) -> io::Result<()>
 where
     P: AsyncRead + AsyncWrite + Unpin,
-    S: AsyncRead + AsyncWrite + AutoProxyIo + Unpin,
+    S: AsyncRead + AsyncWrite + AutoProxyIo + Unpin + DebugStatus,
 {
     if shadow.is_proxied() {
-        me_debug!(
+        debug!(
             "established tcp tunnel {} <-> {} through sever {} (outbound: {})",
             peer_addr,
             target_addr,
@@ -54,12 +55,15 @@ where
                 // Send the first packet.
                 shadow.write_all(&buffer[..n]).await?;
             }
-            Ok(Err(err)) => return Err(err),
-            Err(..) => {
+            Ok(Err(err)) => {
+                error!("Failed to read from client stream: {}", err);
+                return Err(err);
+            }
+            Err(_) => {
                 // Timeout. Send handshake to server.
                 let _ = shadow.write(&[]).await?;
 
-                me_debug!(
+                my_debug!(
                     "tcp tunnel {} -> {} (proxied) sent handshake without data",
                     peer_addr,
                     target_addr
@@ -70,7 +74,7 @@ where
 
     match copy_encrypted_bidirectional(svr_cfg.method(), shadow, plain).await {
         Ok((wn, rn)) => {
-            me_debug!( // trace!
+            trace!(
                 "tcp tunnel {} <-> {} (proxied) closed, L2R {} bytes, R2L {} bytes",
                 peer_addr,
                 target_addr,
@@ -79,7 +83,7 @@ where
             );
         }
         Err(err) => {
-            me_debug!( // trace!
+            trace!(
                 "tcp tunnel {} <-> {} (proxied) closed with error: {}",
                 peer_addr,
                 target_addr,
@@ -114,11 +118,9 @@ where
             );
         }
         Err(err) => {
-            trace!(
+            error!(
                 "tcp tunnel {} <-> {} (bypassed) closed with error: {}",
-                peer_addr,
-                target_addr,
-                err
+                peer_addr, target_addr, err
             );
         }
     }
