@@ -337,10 +337,18 @@ pub enum ServerUserError {
 }
 
 /// Server multi-users manager
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct ServerUserManager {
     pub users: HashMap<Bytes, Arc<ServerUser>>,
 }
+impl Debug for ServerUserManager {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_struct("ServerUserManager")
+            .field("num_users", &self.users.len())
+            .finish()
+    }
+}
+
 
 impl ServerUserManager {
     /// Create a new manager
